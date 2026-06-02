@@ -1,0 +1,5 @@
+# 等场所级协议实测后填充。
+# 示例可能包括：
+# - small-shop-pos/         传统小店收银台 protocol
+# - smart-cabinet-cluster/  智能货柜组（多台联动）
+# - unmanned-store/         无人店全链路（人脸/称重/防盗）
