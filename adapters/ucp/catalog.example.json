@@ -1,0 +1,13 @@
+{
+  "_comment": "Copy to catalog.json and fill in your lane → product mapping. Price in fen (CNY: ¥1.00 = 100).",
+  "currency": "CNY",
+  "lanes": {
+    "100": {"name": "Mineral Water 550ml",   "price": 200},
+    "101": {"name": "Coca Cola 330ml",        "price": 500},
+    "102": {"name": "Green Tea 500ml",        "price": 400},
+    "200": {"name": "Lay's Original 40g",     "price": 800},
+    "201": {"name": "Oreo Cookies 100g",      "price": 700},
+    "300": {"name": "Napkins (pack)",          "price": 150},
+    "301": {"name": "Phone Charging Cable",   "price": 2500}
+  }
+}

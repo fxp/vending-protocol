@@ -15,14 +15,20 @@ vending-protocol/
 │   │                                 涵盖 Web 后台 + 第三方 REST API + webhook 回调
 │   └── vending-machine-control/      某星 XX800 / WM800 系列下位机直连串口控制
 │                                     覆盖 RS232/RS485 + EE 协议帧 + 出货/扫描/状态查询
+├── adapters/                         协议适配层（把硬件暴露为标准协议）
+│   └── ucp/                          UCP (Universal Commerce Protocol) 适配器
+│       ├── server/                   生产适配器：WM800 → UCP REST（需真实硬件）
+│       ├── mock/                     独立 Mock Server：无需硬件，含 71 个协议测试
+│       └── references/               UCP ↔ WM800 字段映射 + 合规差距分析
 ├── venues/                           场所级协议（小店收银 / 智能货柜组 / 无人店）
 │                                     目前还空。等场地实测过再填。
 └── install.sh                        一键 symlink 所有 skill 到 ~/.claude/skills/
 ```
 
 > 目录名 == skill 的 frontmatter `name:`，方便 `install.sh` 直接 symlink。
+> `adapters/<name>/mock/` 子目录也作为独立 skill，`install.sh` 读 SKILL.md 里的 `name:` 字段作为 symlink 名。
 
-每个 `devices/<name>/` 目录都是一个独立的 Claude Code skill，结构：
+每个 `devices/<name>/` 或 `adapters/<name>/` 目录都是一个独立的 Claude Code skill，结构：
 
 ```
 <name>/
@@ -57,6 +63,27 @@ vending-protocol/
 
 > 黑名单（永远不要发）：`0x3D`、`0x23`、`0xBC`、`0x2C`、`0x04`（出货预检）、`0x35 type=1`。详见 `vending-machine-control/references/known-issues.md`。
 
+### `adapters/ucp/` — WM800 UCP 适配器（skill: `ucp-adapter`）
+
+把 WM800 串口机器暴露为符合 [UCP (Universal Commerce Protocol)](https://ucp.dev/) 规范的 REST 服务，让 AI Agent 通过标准化 Cart → Checkout → Order 流程控制出货。
+
+| 触发场景 | 解决 |
+|---|---|
+| "让 WM800 兼容 UCP" | 生产适配器 `server/app.py`，需真实串口 |
+| "本地测试 UCP 流程" | 独立 mock server `mock/server.py`，无需硬件 |
+| "UCP 协议合规差距" | `references/mapping.md` 列出 8 处 P0/P1 缺口 |
+
+**合规状态**：概念兼容，接口层尚不完全符合规范（端点路径、必填字段、status 值名称等有差异，详见 `references/mapping.md`）。
+
+### `adapters/ucp/mock/` — UCP Mock Server（skill: `ucp-mock`）
+
+无需硬件的独立 UCP mock，71 个协议测试（含实时 SSE 场景和 async 时序验证）。
+
+```bash
+cd adapters/ucp/mock && python server.py   # → http://localhost:8080
+pytest test_server.py -v                   # 运行所有测试
+```
+
 ### `venues/` — 占位
 
 小店收银台 / 智能货柜组合 / 无人店的整店级协议——等到现场实测过再填。
@@ -71,15 +98,7 @@ cd vending-protocol
 ./install.sh
 ```
 
-`install.sh` 做的事：
-
-```bash
-mkdir -p ~/.claude/skills
-for d in devices/*/; do
-  name=$(basename "$d")
-  ln -sfn "$(pwd)/$d" "$HOME/.claude/skills/$name"
-done
-```
+`install.sh` 做的事：遍历 `devices/*/`、`venues/*/`、`adapters/*/`，以及 `adapters/*/mock/`（用 SKILL.md 里的 `name:` 字段作为 symlink 名）。
 
 软链而不是 copy——这样 `git pull` 拉到的更新立即对所有 Claude Code 会话生效。
 
@@ -87,19 +106,19 @@ done
 
 进 Claude Code 后任一方式：
 
-1. **关键词触发**（推荐）：在对话里提"微米机器"、"VMS-WM900XY"、"WM800 出货"等关键词，Claude 自动识别并加载对应 skill。
-2. **显式调用**：`/weimi-vending-api` 或 `/vending-machine-control`。
+1. **关键词触发**（推荐）：在对话里提"微米机器"、"VMS-WM900XY"、"WM800 出货"、"UCP mock"等关键词，Claude 自动识别并加载对应 skill。
+2. **显式调用**：`/weimi-vending-api`、`/vending-machine-control`、`/ucp-adapter`、`/ucp-mock`。
 
 每个 skill 的 `SKILL.md` frontmatter 都列了完整触发词。
 
 ## 贡献
 
-加新设备 / 新场所：
+加新设备 / 新场所 / 新适配器：
 
-1. 在 `devices/` 或 `venues/` 下新建目录
-2. 至少包含 `SKILL.md`（参考现有的 frontmatter 格式）
+1. 在 `devices/`、`venues/` 或 `adapters/` 下新建目录
+2. 至少包含 `SKILL.md`（参考现有的 frontmatter 格式，`name:` = 目录名）
 3. 在 README "已覆盖" 区加一行
-4. PR
+4. 重跑 `./install.sh`，然后 PR
 
 **质量要求**：必须是**实测过**的内容。"我猜文档大概是这样"的不收。每条不准的规格都要标 ⚠️ 加证据。
 

@@ -44,6 +44,31 @@ for d in "$REPO_ROOT"/venues/*/; do
   link_dir "${d%/}"
 done
 
+echo "Linking adapters/* skills into $TARGET_DIR/"
+for d in "$REPO_ROOT"/adapters/*/; do
+  [ -d "$d" ] || continue
+  [ -f "$d/SKILL.md" ] || { echo "  skip $(basename "$d") (no SKILL.md)"; continue; }
+  link_dir "${d%/}"
+done
+
+echo "Linking adapters/*/mock skills into $TARGET_DIR/"
+for d in "$REPO_ROOT"/adapters/*/mock/; do
+  [ -d "$d" ] || continue
+  [ -f "$d/SKILL.md" ] || continue
+  # Use the name: field from SKILL.md as the symlink name (not the directory basename).
+  skill_name=$(grep "^name:" "$d/SKILL.md" | head -1 | sed 's/name:[[:space:]]*//')
+  [ -n "$skill_name" ] || skill_name=$(basename "$d")
+  src="${d%/}"
+  dst="$TARGET_DIR/$skill_name"
+  if [ -L "$dst" ]; then
+    ln -sfn "$src" "$dst" && echo "  refreshed: $dst -> $src"
+  elif [ -e "$dst" ]; then
+    echo "  SKIPPED (real path exists): $dst" >&2
+  else
+    ln -s "$src" "$dst" && echo "  linked: $dst -> $src"
+  fi
+done
+
 echo
 echo "Done. Verify with:"
-echo "  ls -la $TARGET_DIR/ | grep -E 'weimi|wm800'"
+echo "  ls -la $TARGET_DIR/ | grep -E 'weimi|wm800|ucp'"
