@@ -1,5 +1,10 @@
 # UCP ↔ WM800 字段映射
 
+> **规范参考 / canonical UCP reference**：本表的"规范要求路径/字段"对照的是
+> [agentic-commerce-skills](https://github.com/fxp/agentic-commerce-skills) 里记录的真实 UCP
+> 能力与字段（`dev.ucp.shopping.checkout` 的端点、`status` 枚举、必需头等），那是协议形态的
+> 抽象参考；本仓库是其在 WM800 真机上的落地实现与差距分析。
+
 ## 流程对比
 
 > 左列为**当前实现路径**，括号内为 UCP 规范要求路径（P0 差距）。

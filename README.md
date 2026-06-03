@@ -67,6 +67,8 @@ vending-protocol/
 
 把 WM800 串口机器暴露为符合 [UCP (Universal Commerce Protocol)](https://ucp.dev/) 规范的 REST 服务，让 AI Agent 通过标准化 Cart → Checkout → Order 流程控制出货。
 
+> 📚 协议参考：UCP 规范形态与字段的抽象 skill 库见 [fxp/agentic-commerce-skills](https://github.com/fxp/agentic-commerce-skills)；本适配器是其在真机上的落地实现，`references/mapping.md` 列出两者差距。
+
 | 触发场景 | 解决 |
 |---|---|
 | "让 WM800 兼容 UCP" | 生产适配器 `server/app.py`，需真实串口 |
