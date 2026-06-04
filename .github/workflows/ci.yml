@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Python mock server tests ────────────────────────────────────────────────
+  pytest:
+    name: pytest (UCP mock server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: adapters/ucp/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest pytest-anyio httpx anyio
+        working-directory: adapters/ucp
+
+      - name: Run tests
+        run: pytest test_server.py -v --tb=short
+        working-directory: adapters/ucp/mock
+
+  # ── TypeScript type-check (Cloudflare mock worker) ──────────────────────────
+  typecheck:
+    name: Type check (mock-worker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cloudflare/mock-worker/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: cloudflare/mock-worker
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+        working-directory: cloudflare/mock-worker
+
+  # ── Deploy ucp-mock to Cloudflare (push to main only) ───────────────────────
+  deploy:
+    name: Deploy → Cloudflare
+    needs: [pytest, typecheck]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cloudflare/mock-worker/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: cloudflare/mock-worker
+
+      - name: Deploy ucp-mock
+        run: npx wrangler deploy
+        working-directory: cloudflare/mock-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Smoke test
+        run: |
+          HEALTH=$(curl -sf https://ucp-mock.fxp007.workers.dev/.well-known/ucp)
+          echo "$HEALTH"
+          echo "$HEALTH" | grep -q '"payment_handlers"' || (echo "smoke test failed" && exit 1)
