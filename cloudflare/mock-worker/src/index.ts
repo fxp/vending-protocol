@@ -206,6 +206,13 @@ body{font-family:-apple-system,"PingFang SC",sans-serif;background:#0a0a0f;color
 .btn:hover:not(:disabled){background:linear-gradient(135deg,#1d4ed8,#1e3a8a)}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn.success{background:linear-gradient(135deg,#059669,#047857)}
+.btn.scan{background:linear-gradient(135deg,#7c3aed,#6d28d9)}
+.scan-area{display:none;margin-bottom:14px;border-radius:10px;overflow:hidden;position:relative;background:#000}
+.scan-area.active{display:block}
+.scan-area video{width:100%;display:block;border-radius:10px}
+.scan-line{position:absolute;top:0;left:0;right:0;height:2px;background:rgba(96,165,250,.8);box-shadow:0 0 6px #60a5fa;animation:scanline 1.8s linear infinite}
+@keyframes scanline{0%{top:0}100%{top:100%}}
+.scan-hint{position:absolute;bottom:8px;left:0;right:0;text-align:center;font-size:11px;color:#93c5fd;background:rgba(0,0,0,.5);padding:4px}
 .events{margin-top:12px}
 .ev{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid #1f2937;font-size:13px;opacity:0;transform:translateY(8px);transition:all .4s}
 .ev.show{opacity:1;transform:none}
@@ -223,13 +230,23 @@ body{font-family:-apple-system,"PingFang SC",sans-serif;background:#0a0a0f;color
   <div class="body">
     <div class="vm-icon">🤖</div>
     <div class="vm-title">AI 自动贩卖机</div>
-    <div class="vm-sub">请输入或扫描取货码</div>
+    <div class="vm-sub">扫描手机二维码或输入取货码</div>
     <div class="order-info">
       <div class="order-row"><span class="label">商品</span><span class="val">${product}</span></div>
       <div class="order-row"><span class="label">金额</span><span class="val" style="color:#10b981">${yStr}</span></div>
     </div>
-    <div class="code-section">
-      <div class="code-label">取货码（扫描二维码或手动输入）</div>
+
+    <!-- Camera QR scanner -->
+    <div class="scan-area" id="scanArea">
+      <video id="scanVideo" autoplay playsinline muted></video>
+      <div class="scan-line"></div>
+      <div class="scan-hint">📱 将手机二维码对准此区域</div>
+    </div>
+
+    <button class="btn scan" id="scanBtn" onclick="toggleScan()">📷 扫描手机二维码</button>
+
+    <div class="code-section" style="margin-top:10px">
+      <div class="code-label">— 或手动输入取货码 —</div>
       <input class="code-input" id="codeInput" value="${pickupCode}" maxlength="8" placeholder="8位取货码" oninput="this.value=this.value.toUpperCase()">
     </div>
     <button class="btn" id="redeemBtn" onclick="redeem()">✅ 确认取货</button>
@@ -242,6 +259,9 @@ var ORDER_ID = decodeURIComponent('${encodeURIComponent(orderId)}');
 var BASE = '${base}';
 var EV_ICONS = {accepted:'⚙️',door_open:'🚪',goods_taken:'🥤',completed:'🎉',rejected:'❌'};
 var EV_LABELS = {accepted:'出货已开始',door_open:'货道门已开',goods_taken:'商品已取出',completed:'感谢购买！请取走商品',rejected:'出货失败'};
+var scanStream = null;
+var scanTimer = null;
+
 function addEvent(type, msg) {
   var el = document.createElement('div');
   el.className = 'ev';
@@ -250,6 +270,61 @@ function addEvent(type, msg) {
   document.getElementById('events').appendChild(el);
   requestAnimationFrame(function(){ el.classList.add('show'); });
 }
+
+// ── Camera QR scanner (BarcodeDetector, Chrome/Edge/Android) ─────────────────
+function toggleScan() {
+  if (scanStream) { stopScan(); return; }
+  var btn = document.getElementById('scanBtn');
+  if (!('BarcodeDetector' in window)) {
+    document.getElementById('statusBar').textContent = '此浏览器不支持摄像头扫码，请手动输入取货码';
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+    .then(function(stream) {
+      scanStream = stream;
+      var video = document.getElementById('scanVideo');
+      video.srcObject = stream;
+      document.getElementById('scanArea').classList.add('active');
+      btn.textContent = '⏹ 停止扫描';
+      btn.style.background = 'linear-gradient(135deg,#dc2626,#b91c1c)';
+      document.getElementById('statusBar').textContent = '摄像头已开启，请将手机二维码对准扫描区域…';
+      var detector = new BarcodeDetector({ formats: ['qr_code', 'code_128', 'code_39'] });
+      scanTimer = setInterval(function() {
+        if (!video.videoWidth) return;
+        detector.detect(video).then(function(codes) {
+          if (!codes.length) return;
+          var raw = codes[0].rawValue;
+          // Extract pickup code: either 8-char code or from URL ?code=XXXXXX
+          var match = raw.match(/[?&]code=([A-Z0-9]{8})/i) || raw.match(/^([A-Z0-9]{8})$/);
+          if (match) {
+            stopScan();
+            document.getElementById('codeInput').value = match[1].toUpperCase();
+            document.getElementById('statusBar').textContent = '✅ 二维码识别成功，正在验证…';
+            redeem();
+          } else if (raw.includes('/vm/') || raw.includes('/orders/')) {
+            // Got the full pickup URL - extract order and auto-redirect if it's a different order
+            stopScan();
+            document.getElementById('statusBar').textContent = '✅ 识别到取货链接，正在处理…';
+            window.location.href = raw;
+          }
+        }).catch(function(){});
+      }, 500);
+    })
+    .catch(function(e) {
+      document.getElementById('statusBar').textContent = '无法访问摄像头：' + e.message;
+    });
+}
+
+function stopScan() {
+  if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+  if (scanStream) { scanStream.getTracks().forEach(function(t){ t.stop(); }); scanStream = null; }
+  document.getElementById('scanArea').classList.remove('active');
+  var btn = document.getElementById('scanBtn');
+  btn.textContent = '📷 扫描手机二维码';
+  btn.style.background = '';
+}
+
+// ── Manual code redeem ────────────────────────────────────────────────────────
 function redeem() {
   var code = document.getElementById('codeInput').value.trim();
   var btn = document.getElementById('redeemBtn');
@@ -273,7 +348,9 @@ function redeem() {
     document.getElementById('statusBar').textContent='网络错误，请重试';
   });
 }
+
 function startSSE(eventsUrl) {
+  stopScan();
   var es = new EventSource(eventsUrl);
   ['accepted','door_open','goods_taken','completed','rejected'].forEach(function(ev) {
     es.addEventListener(ev, function(e) {
