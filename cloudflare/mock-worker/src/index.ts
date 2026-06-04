@@ -15,6 +15,37 @@
 export interface Env {
   JWT_SECRET: string;
   BASE_URL: string;
+  SC_KV: KVNamespace;  // shared with supply-chain-worker; source of truth for inventory
+}
+
+// mock lane_id → SC_KV inv key (supply-chain lane)
+const LANE_TO_SC: Record<string, string> = {
+  "100": "lane-002",  // 矿泉水 550ml
+  "101": "lane-001",  // 可口可乐 330ml (uses 无糖可乐 slot)
+  "102": "lane-004",  // 绿茶 500ml
+  "103": "lane-005",  // 拿铁 250ml
+  "104": "lane-007",  // 百事可乐 330ml
+  "105": "lane-006",  // 气泡水 330ml
+  "200": "lane-010",  // 三明治 → NFC橙汁 slot
+  "201": "lane-009",  // 能量棒 → 美式黑咖啡 slot
+};
+
+async function laneQty(sc_kv: KVNamespace, mockLane: string): Promise<number> {
+  const scKey = LANE_TO_SC[mockLane];
+  if (!scKey) return 0;
+  const raw = await sc_kv.get(`inv:${scKey}`);
+  if (!raw) return 0;
+  return (JSON.parse(raw) as { qty: number }).qty ?? 0;
+}
+
+async function decrementLane(sc_kv: KVNamespace, mockLane: string): Promise<void> {
+  const scKey = LANE_TO_SC[mockLane];
+  if (!scKey) return;
+  const raw = await sc_kv.get(`inv:${scKey}`);
+  if (!raw) return;
+  const inv = JSON.parse(raw) as { qty: number; last_restocked_at: string };
+  inv.qty = Math.max(0, inv.qty - 1);
+  await sc_kv.put(`inv:${scKey}`, JSON.stringify(inv));
 }
 
 // ── Catalog ───────────────────────────────────────────────────────────────────
@@ -432,13 +463,20 @@ export default {
         });
       }
 
-      // ── Cart (catalog) ────────────────────────────────────────────────────
+      // ── Cart (catalog) — qty from SC_KV, 0 = unavailable ────────────────
       if (path === "/cart-sessions" && req.method === "POST") {
         const auth = await requireAuth(req, env);
         if (auth instanceof Response) return auth;
-        const items = Object.entries(CATALOG).map(([lane, info]) => ({
-          id: lane, lane_id: lane, name: info.name, price: info.price, currency: info.currency,
-          available: lane !== "900", quantity_available: lane === "900" ? 0 : 10,
+        const items = await Promise.all(Object.entries(CATALOG).map(async ([lane, info]) => {
+          let qty = 0;
+          if (lane === "900") { qty = 0; }
+          else if (lane === "901") { qty = 1; }   // offline-test lane: always "present"
+          else { qty = await laneQty(env.SC_KV, lane); }
+          return {
+            id: lane, lane_id: lane, name: info.name, price: info.price, currency: info.currency,
+            available: qty > 0,
+            quantity_available: qty,
+          };
         }));
         return ok(wrap({ cart_session_id: uid(), items,
           messages: [{ role: "vending_machine", content: "请选择商品。" }] }, base));
@@ -493,6 +531,13 @@ export default {
           if (laneId === "901") return ok({ ucp: "2026-04-08", error: "device_unavailable",
             message: "机器离线。", continue_url: `${base}/fallback` }, 503);
 
+          // Check live inventory; reject if sold out
+          const currentQty = await laneQty(env.SC_KV, laneId);
+          if (currentQty === 0 && laneId !== "900") {
+            return ok({ ucp: "2026-04-08", error: "lane_empty",
+              message: "该商品已售罄，请选择其他商品。", continue_url: `${base}/fallback` }, 409);
+          }
+
           const isFailed = laneId === "900";
           const pickupCode = (await hmacB64(`pickup:${checkoutToken}`, env.JWT_SECRET)).slice(0, 8).toUpperCase();
 
@@ -506,6 +551,11 @@ export default {
           };
           const orderId = await signJWT(ordPayload, env.JWT_SECRET);
           const pickupUrl = `${base}/vm/${encodeURIComponent(orderId)}?code=${pickupCode}&product=${encodeURIComponent(String(cs.name))}&amount=${cs.amt}`;
+
+          // Decrement SC_KV inventory on successful order (not for test lanes 900/901)
+          if (!isFailed && laneId !== "901") {
+            await decrementLane(env.SC_KV, laneId);
+          }
 
           return ok(wrap({
             order_id: orderId,
