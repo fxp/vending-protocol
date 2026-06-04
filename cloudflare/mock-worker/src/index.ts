@@ -18,11 +18,18 @@ export interface Env {
   SC_KV: KVNamespace;  // shared with supply-chain-worker; source of truth for inventory
 }
 
-const MACHINES: Record<string, { id: string; name: string; location: string }> = {
-  "vm-001": { id: "vm-001", name: "1楼大厅", location: "1F Main Hall" },
-  "vm-002": { id: "vm-002", name: "2楼会议区", location: "2F Conference Wing" },
-  "vm-003": { id: "vm-003", name: "地下停车场", location: "B1 Parking" },
-};
+interface Machine { id: string; name: string; location: string; }
+
+async function getAllMachines(kv: KVNamespace): Promise<Machine[]> {
+  const list = await kv.list({ prefix: "machine:" });
+  const items = await Promise.all(list.keys.map(k => kv.get(k.name)));
+  return items.filter(Boolean).map(v => JSON.parse(v!));
+}
+
+async function getMachine(kv: KVNamespace, id: string): Promise<Machine | null> {
+  const v = await kv.get(`machine:${id}`);
+  return v ? JSON.parse(v) : null;
+}
 
 // ── KV-backed catalog helpers ─────────────────────────────────────────────────
 interface LaneConfig {
@@ -418,12 +425,12 @@ export default {
 
       // ── Machines ──────────────────────────────────────────────────────────
       if (path === "/machines" && req.method === "GET") {
-        return ok(Object.values(MACHINES));
+        return ok(await getAllMachines(env.SC_KV));
       }
       { const mm = path.match(/^\/machines\/([^/]+)$/);
         if (mm && req.method === "GET") {
           const mid = mm[1];
-          const machine = MACHINES[mid];
+          const machine = await getMachine(env.SC_KV, mid);
           if (!machine) return err("machine_not_found", 404);
           const lanes = await getMachineCatalog(env.SC_KV, mid);
           return ok({ ...machine, lanes });
