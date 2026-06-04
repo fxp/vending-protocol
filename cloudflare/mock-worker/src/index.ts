@@ -24,49 +24,36 @@ const MACHINES: Record<string, { id: string; name: string; location: string }> =
   "vm-003": { id: "vm-003", name: "地下停车场", location: "B1 Parking" },
 };
 
-// mock lane_id → SC_KV inv key (supply-chain lane)
-const LANE_TO_SC: Record<string, string> = {
-  "100": "lane-002",  // 矿泉水 550ml
-  "101": "lane-001",  // 可口可乐 330ml (uses 无糖可乐 slot)
-  "102": "lane-004",  // 绿茶 500ml
-  "103": "lane-005",  // 拿铁 250ml
-  "104": "lane-007",  // 百事可乐 330ml
-  "105": "lane-006",  // 气泡水 330ml
-  "200": "lane-010",  // 三明治 → NFC橙汁 slot
-  "201": "lane-009",  // 能量棒 → 美式黑咖啡 slot
-};
+// ── KV-backed catalog helpers ─────────────────────────────────────────────────
+interface LaneConfig {
+  lane_id: string;
+  sku_id: string;
+  name: string;
+  price_fen: number;
+  currency: string;
+  min_qty?: number;
+  capacity?: number;
+}
 
-async function laneQty(sc_kv: KVNamespace, machineId: string, mockLane: string): Promise<number> {
-  const scKey = LANE_TO_SC[mockLane];
-  if (!scKey) return 0;
-  const raw = await sc_kv.get(`inv:${machineId}:${scKey}`);
+async function getMachineCatalog(kv: KVNamespace, machineId: string): Promise<LaneConfig[]> {
+  const list = await kv.list({ prefix: `lane:${machineId}:` });
+  const items = await Promise.all(list.keys.map(k => kv.get(k.name)));
+  return items.filter(Boolean).map(v => JSON.parse(v!) as LaneConfig);
+}
+
+async function laneQty(sc_kv: KVNamespace, machineId: string, laneId: string): Promise<number> {
+  const raw = await sc_kv.get(`inv:${machineId}:${laneId}`);
   if (!raw) return 0;
   return (JSON.parse(raw) as { qty: number }).qty ?? 0;
 }
 
-async function decrementLane(sc_kv: KVNamespace, machineId: string, mockLane: string): Promise<void> {
-  const scKey = LANE_TO_SC[mockLane];
-  if (!scKey) return;
-  const raw = await sc_kv.get(`inv:${machineId}:${scKey}`);
+async function decrementLane(sc_kv: KVNamespace, machineId: string, laneId: string): Promise<void> {
+  const raw = await sc_kv.get(`inv:${machineId}:${laneId}`);
   if (!raw) return;
   const inv = JSON.parse(raw) as { qty: number; last_restocked_at: string };
   inv.qty = Math.max(0, inv.qty - 1);
-  await sc_kv.put(`inv:${machineId}:${scKey}`, JSON.stringify(inv));
+  await sc_kv.put(`inv:${machineId}:${laneId}`, JSON.stringify(inv));
 }
-
-// ── Catalog ───────────────────────────────────────────────────────────────────
-const CATALOG: Record<string, { name: string; price: number; currency: string }> = {
-  "100": { name: "矿泉水 550ml",    price: 200,  currency: "CNY" },
-  "101": { name: "可口可乐 330ml",  price: 500,  currency: "CNY" },
-  "102": { name: "绿茶 500ml",      price: 400,  currency: "CNY" },
-  "103": { name: "拿铁 250ml",      price: 1500, currency: "CNY" },
-  "104": { name: "百事可乐 330ml",  price: 450,  currency: "CNY" },
-  "105": { name: "气泡水 330ml",    price: 350,  currency: "CNY" },
-  "200": { name: "三明治",          price: 2500, currency: "CNY" },
-  "201": { name: "能量棒",          price: 800,  currency: "CNY" },
-  "900": { name: "[空货道测试]",    price: 100,  currency: "CNY" },
-  "901": { name: "[离线机器测试]",  price: 100,  currency: "CNY" },
-};
 
 const CLIENT_ID     = "demo";
 const CLIENT_SECRET = "demo";
@@ -438,7 +425,7 @@ export default {
           const mid = mm[1];
           const machine = MACHINES[mid];
           if (!machine) return err("machine_not_found", 404);
-          const lanes = Object.entries(CATALOG).map(([lane_id, info]) => ({ lane_id, ...info }));
+          const lanes = await getMachineCatalog(env.SC_KV, mid);
           return ok({ ...machine, lanes });
         }
       }
@@ -488,13 +475,16 @@ export default {
       if (path === "/cart-sessions" && req.method === "POST") {
         const auth = await requireAuth(req, env);
         if (auth instanceof Response) return auth;
-        const items = await Promise.all(Object.entries(CATALOG).map(async ([lane, info]) => {
-          let qty = 0;
-          if (lane === "900") { qty = 0; }
-          else if (lane === "901") { qty = 1; }   // offline-test lane: always "present"
-          else { qty = await laneQty(env.SC_KV, machineId, lane); }
+        const catalog = await getMachineCatalog(env.SC_KV, machineId);
+        if (catalog.length === 0) {
+          return ok(wrap({ cart_session_id: uid(), items: [],
+            messages: [{ role: "vending_machine", content: "此贩卖机暂无商品，请联系管理员配置货道。" }] }, base));
+        }
+        const items = await Promise.all(catalog.map(async (lane) => {
+          const qty = await laneQty(env.SC_KV, machineId, lane.lane_id);
           return {
-            id: lane, lane_id: lane, name: info.name, price: info.price, currency: info.currency,
+            id: lane.lane_id, lane_id: lane.lane_id, name: lane.name,
+            price: lane.price_fen, currency: lane.currency,
             available: qty > 0,
             quantity_available: qty,
           };
@@ -510,7 +500,20 @@ export default {
         const body = await req.json().catch(() => ({})) as Record<string, unknown>;
         const lineItems = body.line_items as Array<{ id: string }> | undefined;
         const laneId = String(lineItems?.[0]?.id ?? body.lane_id ?? "");
-        const item = CATALOG[laneId];
+
+        // Special test lanes: hardcoded, not in catalog
+        let item: { name: string; price: number; currency: string } | null = null;
+        if (laneId === "900") {
+          item = { name: "[空货道测试]", price: 100, currency: "CNY" };
+        } else if (laneId === "901") {
+          item = { name: "[离线机器测试]", price: 100, currency: "CNY" };
+        } else {
+          const laneConfig = await env.SC_KV.get(`lane:${machineId}:${laneId}`);
+          if (laneConfig) {
+            const lc = JSON.parse(laneConfig) as LaneConfig;
+            item = { name: lc.name, price: lc.price_fen, currency: lc.currency };
+          }
+        }
         if (!item) return err("item_not_found", 404);
 
         // Checkout session ID = signed JWT (stateless)
