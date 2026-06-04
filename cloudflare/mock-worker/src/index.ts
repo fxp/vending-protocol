@@ -18,6 +18,12 @@ export interface Env {
   SC_KV: KVNamespace;  // shared with supply-chain-worker; source of truth for inventory
 }
 
+const MACHINES: Record<string, { id: string; name: string; location: string }> = {
+  "vm-001": { id: "vm-001", name: "1楼大厅", location: "1F Main Hall" },
+  "vm-002": { id: "vm-002", name: "2楼会议区", location: "2F Conference Wing" },
+  "vm-003": { id: "vm-003", name: "地下停车场", location: "B1 Parking" },
+};
+
 // mock lane_id → SC_KV inv key (supply-chain lane)
 const LANE_TO_SC: Record<string, string> = {
   "100": "lane-002",  // 矿泉水 550ml
@@ -30,22 +36,22 @@ const LANE_TO_SC: Record<string, string> = {
   "201": "lane-009",  // 能量棒 → 美式黑咖啡 slot
 };
 
-async function laneQty(sc_kv: KVNamespace, mockLane: string): Promise<number> {
+async function laneQty(sc_kv: KVNamespace, machineId: string, mockLane: string): Promise<number> {
   const scKey = LANE_TO_SC[mockLane];
   if (!scKey) return 0;
-  const raw = await sc_kv.get(`inv:${scKey}`);
+  const raw = await sc_kv.get(`inv:${machineId}:${scKey}`);
   if (!raw) return 0;
   return (JSON.parse(raw) as { qty: number }).qty ?? 0;
 }
 
-async function decrementLane(sc_kv: KVNamespace, mockLane: string): Promise<void> {
+async function decrementLane(sc_kv: KVNamespace, machineId: string, mockLane: string): Promise<void> {
   const scKey = LANE_TO_SC[mockLane];
   if (!scKey) return;
-  const raw = await sc_kv.get(`inv:${scKey}`);
+  const raw = await sc_kv.get(`inv:${machineId}:${scKey}`);
   if (!raw) return;
   const inv = JSON.parse(raw) as { qty: number; last_restocked_at: string };
   inv.qty = Math.max(0, inv.qty - 1);
-  await sc_kv.put(`inv:${scKey}`, JSON.stringify(inv));
+  await sc_kv.put(`inv:${machineId}:${scKey}`, JSON.stringify(inv));
 }
 
 // ── Catalog ───────────────────────────────────────────────────────────────────
@@ -421,6 +427,21 @@ export default {
     const base = env.BASE_URL || `${url.protocol}//${url.host}`;
 
     try {
+      const machineId = url.searchParams.get("machine_id") ?? "vm-001";
+
+      // ── Machines ──────────────────────────────────────────────────────────
+      if (path === "/machines" && req.method === "GET") {
+        return ok(Object.values(MACHINES));
+      }
+      { const mm = path.match(/^\/machines\/([^/]+)$/);
+        if (mm && req.method === "GET") {
+          const mid = mm[1];
+          const machine = MACHINES[mid];
+          if (!machine) return err("machine_not_found", 404);
+          const lanes = Object.entries(CATALOG).map(([lane_id, info]) => ({ lane_id, ...info }));
+          return ok({ ...machine, lanes });
+        }
+      }
 
       // ── OAuth token ────────────────────────────────────────────────────────
       if (path === "/oauth/token" && req.method === "POST") {
@@ -471,7 +492,7 @@ export default {
           let qty = 0;
           if (lane === "900") { qty = 0; }
           else if (lane === "901") { qty = 1; }   // offline-test lane: always "present"
-          else { qty = await laneQty(env.SC_KV, lane); }
+          else { qty = await laneQty(env.SC_KV, machineId, lane); }
           return {
             id: lane, lane_id: lane, name: info.name, price: info.price, currency: info.currency,
             available: qty > 0,
@@ -496,6 +517,7 @@ export default {
         const csPayload = {
           sub: "cs", lane: laneId, name: item.name,
           amt: item.price, cur: item.currency,
+          machine: machineId,
           iat: now(), exp: now() + 7200,
         };
         const checkoutId = await signJWT(csPayload, env.JWT_SECRET);
@@ -528,11 +550,12 @@ export default {
           if (!cs || cs.sub !== "cs") return err("checkout_not_found", 404);
 
           const laneId = String(cs.lane);
+          const csMachineId = String(cs.machine ?? "vm-001");
           if (laneId === "901") return ok({ ucp: "2026-04-08", error: "device_unavailable",
             message: "机器离线。", continue_url: `${base}/fallback` }, 503);
 
           // Check live inventory; reject if sold out
-          const currentQty = await laneQty(env.SC_KV, laneId);
+          const currentQty = await laneQty(env.SC_KV, csMachineId, laneId);
           if (currentQty === 0 && laneId !== "900") {
             return ok({ ucp: "2026-04-08", error: "lane_empty",
               message: "该商品已售罄，请选择其他商品。", continue_url: `${base}/fallback` }, 409);
@@ -545,6 +568,7 @@ export default {
           const ordPayload = {
             sub: "ord", lane: laneId, name: cs.name, amt: cs.amt, cur: cs.cur,
             cs: checkoutToken, pickup: pickupCode,
+            machine: csMachineId,
             status: isFailed ? "failed" : "awaiting_pickup",
             fail: isFailed ? "lane_empty" : null,
             iat: now(), exp: now() + 86400,
@@ -554,7 +578,7 @@ export default {
 
           // Decrement SC_KV inventory on successful order (not for test lanes 900/901)
           if (!isFailed && laneId !== "901") {
-            await decrementLane(env.SC_KV, laneId);
+            await decrementLane(env.SC_KV, csMachineId, laneId);
           }
 
           return ok(wrap({
