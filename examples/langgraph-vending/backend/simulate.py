@@ -342,16 +342,16 @@ async def main(
     interval_s: float,
     concurrency: int = 1,
     with_monitor: bool = False,
-    monitor_interval: float = 90.0,
+    check_interval: float = 30.0,
+    order_interval: float = 120.0,
     restock_delay: int = 30,
-    force_restock: bool = False,
 ):
     print(_color("贩卖机 LangGraph Agent 消费者模拟", "1;35"))
     print(f"目标: {total_runs or '∞'} 次 | 并发: {concurrency} | 间隔: {interval_s}s | 模型: {os.getenv('BIGMODEL_MODEL', 'glm-5.1')}")
     print(f"UCP: {os.getenv('UCP_MOCK_URL', 'https://ucp-mock.fxp007.workers.dev')}")
     print(f"SC:  {os.getenv('SUPPLY_CHAIN_URL', 'https://supply-chain-mock.fxp007.workers.dev')}")
     if with_monitor:
-        print(f"监控: 每 {monitor_interval}s 检查库存 | 到货延迟 {restock_delay}s | force={force_restock}")
+        print(f"监控: 扫描 {check_interval}s | 补货 {order_interval}s | 配送延迟 {restock_delay}s")
     print()
 
     # Start inventory monitor as background task
@@ -359,12 +359,12 @@ async def main(
     if with_monitor:
         monitor_task = asyncio.create_task(
             run_monitor(
-                interval_s=monitor_interval,
+                check_interval=check_interval,
+                order_interval=order_interval,
                 dry_run=False,
                 once=False,
                 restock_delay_s=restock_delay,
-                force=force_restock,
-                initial_delay_s=monitor_interval * 0.5,  # first check after half interval
+                initial_delay_s=check_interval * 0.5,  # first scan after half interval
             )
         )
 
@@ -428,12 +428,12 @@ if __name__ == "__main__":
     parser.add_argument("--persona", type=str, default=None, help="指定用户角色名（模糊匹配）")
     parser.add_argument("--with-monitor", action="store_true",
                         help="同时运行库存监控 & 自动补货")
-    parser.add_argument("--monitor-interval", type=float, default=90.0,
-                        help="库存检查间隔秒数（默认90）")
+    parser.add_argument("--check-interval", type=float, default=30.0,
+                        help="库存扫描间隔秒数（默认30）")
+    parser.add_argument("--order-interval", type=float, default=120.0,
+                        help="统一补货间隔秒数（默认120）")
     parser.add_argument("--restock-delay", type=int, default=30,
-                        help="模拟到货延迟秒数（默认30）")
-    parser.add_argument("--force-restock", action="store_true",
-                        help="忽略最低起订量，强制补货")
+                        help="模拟配送延迟秒数（默认30）")
     args = parser.parse_args()
 
     if args.persona:
@@ -449,9 +449,9 @@ if __name__ == "__main__":
             args.interval,
             args.concurrency,
             with_monitor=args.with_monitor,
-            monitor_interval=args.monitor_interval,
+            check_interval=args.check_interval,
+            order_interval=args.order_interval,
             restock_delay=args.restock_delay,
-            force_restock=args.force_restock,
         ))
     except KeyboardInterrupt:
         print(metrics.summary())
