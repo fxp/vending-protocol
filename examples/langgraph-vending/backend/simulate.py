@@ -35,6 +35,7 @@ load_dotenv(Path(__file__).parent / ".env")
 from langchain_core.messages import HumanMessage
 
 from app.vending_graph import vending_graph
+from inventory_monitor import run_monitor
 
 
 # --------------------------------------------------------------------------- #
@@ -336,51 +337,84 @@ async def run_batch(batch: list[tuple[Persona, str, int]]) -> list[dict]:
     return list(await asyncio.gather(*tasks, return_exceptions=False))
 
 
-async def main(total_runs: int | None, interval_s: float, concurrency: int = 1):
+async def main(
+    total_runs: int | None,
+    interval_s: float,
+    concurrency: int = 1,
+    with_monitor: bool = False,
+    monitor_interval: float = 90.0,
+    restock_delay: int = 30,
+    force_restock: bool = False,
+):
     print(_color("贩卖机 LangGraph Agent 消费者模拟", "1;35"))
     print(f"目标: {total_runs or '∞'} 次 | 并发: {concurrency} | 间隔: {interval_s}s | 模型: {os.getenv('BIGMODEL_MODEL', 'glm-5.1')}")
     print(f"UCP: {os.getenv('UCP_MOCK_URL', 'https://ucp-mock.fxp007.workers.dev')}")
     print(f"SC:  {os.getenv('SUPPLY_CHAIN_URL', 'https://supply-chain-mock.fxp007.workers.dev')}")
+    if with_monitor:
+        print(f"监控: 每 {monitor_interval}s 检查库存 | 到货延迟 {restock_delay}s | force={force_restock}")
     print()
+
+    # Start inventory monitor as background task
+    monitor_task = None
+    if with_monitor:
+        monitor_task = asyncio.create_task(
+            run_monitor(
+                interval_s=monitor_interval,
+                dry_run=False,
+                once=False,
+                restock_delay_s=restock_delay,
+                force=force_restock,
+                initial_delay_s=monitor_interval * 0.5,  # first check after half interval
+            )
+        )
 
     run_id = 0
     summary_every = 5
 
-    while True:
-        # Build next batch
-        batch: list[tuple[Persona, str, int]] = []
-        for _ in range(concurrency):
-            run_id += 1
-            if total_runs and run_id > total_runs:
+    try:
+        while True:
+            # Build next batch
+            batch: list[tuple[Persona, str, int]] = []
+            for _ in range(concurrency):
+                run_id += 1
+                if total_runs and run_id > total_runs:
+                    break
+                persona = random.choice(PERSONAS)
+                opening = random.choice(persona.scenarios)
+                batch.append((persona, opening, run_id))
+
+            if not batch:
                 break
-            persona = random.choice(PERSONAS)
-            opening = random.choice(persona.scenarios)
-            batch.append((persona, opening, run_id))
 
-        if not batch:
-            break
+            if concurrency > 1 and len(batch) > 1:
+                print(f"\n{'═'*60}")
+                print(f"  并发批次 #{(run_id - len(batch) + 1)}–#{run_id}  ({len(batch)} 个会话同时运行)")
+                print(f"{'═'*60}")
 
-        if concurrency > 1 and len(batch) > 1:
-            print(f"\n{'═'*60}")
-            print(f"  并发批次 #{(run_id - len(batch) + 1)}–#{run_id}  ({len(batch)} 个会话同时运行)")
-            print(f"{'═'*60}")
+            results = await run_batch(batch)
+            for r in results:
+                metrics.record(r)
 
-        results = await run_batch(batch)
-        for r in results:
-            metrics.record(r)
+            completed = metrics.runs
+            if completed % summary_every == 0 or (total_runs and completed >= total_runs):
+                print(metrics.summary())
 
-        completed = metrics.runs
-        if completed % summary_every == 0 or (total_runs and completed >= total_runs):
-            print(metrics.summary())
+            remaining = (total_runs - completed) if total_runs else None
+            if remaining is None or remaining > 0:
+                jitter = interval_s * (0.5 + random.random())
+                print(f"  ⏳ 等待 {jitter:.1f}s ...")
+                await asyncio.sleep(jitter)
 
-        remaining = (total_runs - completed) if total_runs else None
-        if remaining is None or remaining > 0:
-            jitter = interval_s * (0.5 + random.random())
-            print(f"  ⏳ 等待 {jitter:.1f}s ...")
-            await asyncio.sleep(jitter)
+            if total_runs and metrics.runs >= total_runs:
+                break
 
-        if total_runs and metrics.runs >= total_runs:
-            break
+    finally:
+        if monitor_task and not monitor_task.done():
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
 
     print(metrics.summary())
     print("\n模拟结束。")
@@ -392,6 +426,14 @@ if __name__ == "__main__":
     parser.add_argument("--interval", type=float, default=10.0, help="批次间平均间隔秒数（默认10）")
     parser.add_argument("--concurrency", "-c", type=int, default=1, help="并发会话数（默认1）")
     parser.add_argument("--persona", type=str, default=None, help="指定用户角色名（模糊匹配）")
+    parser.add_argument("--with-monitor", action="store_true",
+                        help="同时运行库存监控 & 自动补货")
+    parser.add_argument("--monitor-interval", type=float, default=90.0,
+                        help="库存检查间隔秒数（默认90）")
+    parser.add_argument("--restock-delay", type=int, default=30,
+                        help="模拟到货延迟秒数（默认30）")
+    parser.add_argument("--force-restock", action="store_true",
+                        help="忽略最低起订量，强制补货")
     args = parser.parse_args()
 
     if args.persona:
@@ -402,7 +444,15 @@ if __name__ == "__main__":
             print(f"使用角色: {[p.name for p in PERSONAS]}")
 
     try:
-        asyncio.run(main(args.runs, args.interval, args.concurrency))
+        asyncio.run(main(
+            args.runs,
+            args.interval,
+            args.concurrency,
+            with_monitor=args.with_monitor,
+            monitor_interval=args.monitor_interval,
+            restock_delay=args.restock_delay,
+            force_restock=args.force_restock,
+        ))
     except KeyboardInterrupt:
         print(metrics.summary())
         print("\n已中断。")
