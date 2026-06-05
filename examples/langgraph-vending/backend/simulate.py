@@ -244,11 +244,20 @@ async def run_session(persona: Persona, opening_message: str, run_id: int) -> di
                 print(f"  ❌ 系统持续错误")
                 break
 
-            # Agent presenting a list and asking user to choose an item
+            # Price/confirm prompt — check BEFORE selection to avoid false matches
+            if ("¥" in last_ai_text or "总价" in last_ai_text or "合计" in last_ai_text) and \
+               any(kw in last_ai_text for kw in ["确认", "是否购买", "支付", "请确认"]):
+                messages = [HumanMessage(content=random.choice(AUTO_CONFIRM))]
+                continue
+
+            # Agent presenting a numbered list and asking user to choose an item
             needs_selection = any(kw in last_ai_text for kw in [
-                "哪种", "哪一种", "哪款", "选择", "请选", "1.", "2.", "1️⃣", "2️⃣",
-                "经典", "无糖",
-            ]) and ("？" in last_ai_text or "?" in last_ai_text or "请" in last_ai_text)
+                "哪种", "哪一种", "哪款", "请选", "1️⃣", "2️⃣",
+            ]) and ("？" in last_ai_text or "?" in last_ai_text)
+            # Also trigger on numbered list with prices but NOT when it's a confirm message
+            if not needs_selection and _re.search(r"[12]\.\s*\*{0,2}[^\n]{2,15}\*{0,2}.*¥", last_ai_text):
+                if "确认" not in last_ai_text[:80] and "合计" not in last_ai_text[:80]:
+                    needs_selection = True
 
             if needs_selection:
                 # Try to extract first item name from numbered list
@@ -266,12 +275,6 @@ async def run_session(persona: Persona, opening_message: str, run_id: int) -> di
                     reply = "经典" if "经典" in last_ai_text else "1"
                 print(f"  [sim: 选 '{reply}']")
                 messages = [HumanMessage(content=reply)]
-                continue
-
-            # Price/confirm prompt
-            if ("¥" in last_ai_text or "总价" in last_ai_text or "费用" in last_ai_text) and \
-               any(kw in last_ai_text for kw in ["确认", "是否", "支付", "购买"]):
-                messages = [HumanMessage(content=random.choice(AUTO_CONFIRM))]
                 continue
 
             # Other question
