@@ -551,6 +551,61 @@ export default {
         }
       }
 
+      // ── Checkout update (PUT) — supports discount codes ──────────────────
+      { const m = path.match(/^\/checkout-sessions\/([^/]+)$/);
+        if (m && req.method === "PUT") {
+          const auth = await requireAuth(req, env); if (auth instanceof Response) return auth;
+          const cs = await verifyJWT(decodeURIComponent(m[1]), env.JWT_SECRET);
+          if (!cs || cs.sub !== "cs") return err("checkout_not_found", 404);
+
+          const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+          const discounts = body.discounts as Array<{ code: string }> | undefined;
+          const code = discounts?.[0]?.code?.toUpperCase() ?? "";
+
+          // Supported demo discount codes
+          const DISCOUNT_MAP: Record<string, number> = { SAVE10: 10, VEND20: 20 };
+          const pct = DISCOUNT_MAP[code] ?? 0;
+          const messages: unknown[] = [];
+
+          if (code && !pct) {
+            messages.push({ type: "error", code: "discount.invalid_code", severity: "recoverable",
+              content: `优惠码「${code}」无效或已过期。` });
+          }
+
+          const originalAmt = Number(cs.amt);
+          const discountAmt = pct ? Math.round(originalAmt * pct / 100) : 0;
+          const finalAmt    = originalAmt - discountAmt;
+
+          // Re-sign a new JWT that encodes the discounted amount
+          const newPayload = { ...cs, amt: finalAmt, disc: discountAmt, disc_code: pct ? code : null };
+          const newId = await signJWT(newPayload, env.JWT_SECRET);
+
+          const totals: unknown[] = [
+            { type: "subtotal", display_text: "小计", amount: originalAmt },
+            ...(discountAmt > 0 ? [{ type: "discount", display_text: code, amount: -discountAmt }] : []),
+            { type: "total", display_text: "合计", amount: finalAmt },
+          ];
+
+          return ok(wrap({
+            checkout_session_id: newId,
+            status: "ready_for_complete",
+            amount: finalAmt, currency: cs.cur,
+            item: { lane_id: cs.lane, name: cs.name },
+            totals, messages,
+          }, base));
+        }
+      }
+
+      // ── Checkout cancel ───────────────────────────────────────────────────
+      { const m = path.match(/^\/checkout-sessions\/([^/]+)\/cancel$/);
+        if (m && req.method === "POST") {
+          const auth = await requireAuth(req, env); if (auth instanceof Response) return auth;
+          const cs = await verifyJWT(decodeURIComponent(m[1]), env.JWT_SECRET);
+          if (!cs || cs.sub !== "cs") return err("checkout_not_found", 404);
+          return ok(wrap({ checkout_session_id: m[1], status: "canceled" }, base));
+        }
+      }
+
       // ── Checkout complete ─────────────────────────────────────────────────
       { const m = path.match(/^\/checkout-sessions\/([^/]+)\/complete$/);
         if (m && req.method === "POST") {
