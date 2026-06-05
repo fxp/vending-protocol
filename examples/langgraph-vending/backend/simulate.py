@@ -55,17 +55,21 @@ PERSONAS = [
         machine_id="vm-001",
         scenarios=[
             "我想买可乐",
-            "来瓶矿泉水",
-            "有没有红牛",
+            "来瓶雪碧",
+            "有没有冰红茶",
+            "我要一瓶苏打水",
+            "来杯咖啡",
         ],
     ),
     Persona(
         name="李四（使用折扣码）",
         user_id="lisi-sim-002",
-        machine_id="vm-002",
+        machine_id="vm-001",
         scenarios=[
             "我要买可乐，我有优惠码 SAVE10",
-            "给我来瓶矿泉水，用折扣码 VEND20",
+            "给我来瓶绿茶，用折扣码 VEND20",
+            "雪碧一瓶，优惠码 SAVE10",
+            "来杯拿铁，用 VEND20",
         ],
     ),
     Persona(
@@ -74,7 +78,9 @@ PERSONAS = [
         machine_id=None,
         scenarios=[
             "哪里能买到可乐？",
-            "我想买矿泉水，附近哪台机器有？",
+            "我想买绿茶，附近哪台机器有？",
+            "哪里有雪碧？",
+            "我想喝咖啡，哪台有？",
         ],
     ),
     Persona(
@@ -83,7 +89,27 @@ PERSONAS = [
         machine_id="vm-001",
         scenarios=[
             "有没有燕京啤酒？",
-            "我想买进口矿泉水",
+            "我想买矿泉水",
+        ],
+    ),
+    Persona(
+        name="老张（咖啡爱好者）",
+        user_id="laozhang-sim-005",
+        machine_id="vm-001",
+        scenarios=[
+            "我要一杯拿铁咖啡",
+            "有美式咖啡吗",
+            "来杯黑咖啡",
+        ],
+    ),
+    Persona(
+        name="小红（健康饮品）",
+        user_id="xiaohong-sim-006",
+        machine_id="vm-001",
+        scenarios=[
+            "有没有橙汁",
+            "我想买东方树叶",
+            "来瓶苏打气泡水",
         ],
     ),
 ]
