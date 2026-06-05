@@ -330,47 +330,57 @@ async def run_session(persona: Persona, opening_message: str, run_id: int) -> di
 # --------------------------------------------------------------------------- #
 # Main loop
 # --------------------------------------------------------------------------- #
-async def main(total_runs: int | None, interval_s: float):
+async def run_batch(batch: list[tuple[Persona, str, int]]) -> list[dict]:
+    """Run a batch of sessions concurrently, return results in order."""
+    tasks = [run_session(p, msg, rid) for p, msg, rid in batch]
+    return list(await asyncio.gather(*tasks, return_exceptions=False))
+
+
+async def main(total_runs: int | None, interval_s: float, concurrency: int = 1):
     print(_color("贩卖机 LangGraph Agent 消费者模拟", "1;35"))
-    print(f"目标: {total_runs or '∞'} 次 | 间隔: {interval_s}s | 模型: {os.getenv('BIGMODEL_MODEL', 'glm-5.1')}")
+    print(f"目标: {total_runs or '∞'} 次 | 并发: {concurrency} | 间隔: {interval_s}s | 模型: {os.getenv('BIGMODEL_MODEL', 'glm-5.1')}")
     print(f"UCP: {os.getenv('UCP_MOCK_URL', 'https://ucp-mock.fxp007.workers.dev')}")
     print(f"SC:  {os.getenv('SUPPLY_CHAIN_URL', 'https://supply-chain-mock.fxp007.workers.dev')}")
     print()
 
     run_id = 0
-    summary_every = 5  # print summary every N runs
+    summary_every = 5
 
     while True:
-        run_id += 1
-        if total_runs and run_id > total_runs:
+        # Build next batch
+        batch: list[tuple[Persona, str, int]] = []
+        for _ in range(concurrency):
+            run_id += 1
+            if total_runs and run_id > total_runs:
+                break
+            persona = random.choice(PERSONAS)
+            opening = random.choice(persona.scenarios)
+            batch.append((persona, opening, run_id))
+
+        if not batch:
             break
 
-        # Pick random persona and scenario
-        persona = random.choice(PERSONAS)
-        opening = random.choice(persona.scenarios)
+        if concurrency > 1 and len(batch) > 1:
+            print(f"\n{'═'*60}")
+            print(f"  并发批次 #{(run_id - len(batch) + 1)}–#{run_id}  ({len(batch)} 个会话同时运行)")
+            print(f"{'═'*60}")
 
-        try:
-            run_result = await run_session(persona, opening, run_id)
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            run_result = {
-                "run_id": run_id, "persona": persona.name, "opening": opening,
-                "error": True, "success": False, "out_of_stock": False,
-                "preorder": False, "discount": False, "canceled": False,
-                "pickup_code": None, "messages_exchanged": 0, "duration_s": 0.0,
-            }
-            print(f"  💥 Run {run_id} failed: {e}")
+        results = await run_batch(batch)
+        for r in results:
+            metrics.record(r)
 
-        metrics.record(run_result)
-
-        if run_id % summary_every == 0:
+        completed = metrics.runs
+        if completed % summary_every == 0 or (total_runs and completed >= total_runs):
             print(metrics.summary())
 
-        if not total_runs or run_id < total_runs:
+        remaining = (total_runs - completed) if total_runs else None
+        if remaining is None or remaining > 0:
             jitter = interval_s * (0.5 + random.random())
-            print(f"  ⏳ 等待 {jitter:.1f}s 后进行下一次模拟...")
+            print(f"  ⏳ 等待 {jitter:.1f}s ...")
             await asyncio.sleep(jitter)
+
+        if total_runs and metrics.runs >= total_runs:
+            break
 
     print(metrics.summary())
     print("\n模拟结束。")
@@ -379,7 +389,8 @@ async def main(total_runs: int | None, interval_s: float):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="贩卖机消费者行为模拟")
     parser.add_argument("--runs", type=int, default=None, help="总运行次数（默认无限）")
-    parser.add_argument("--interval", type=float, default=10.0, help="会话间平均间隔秒数（默认10）")
+    parser.add_argument("--interval", type=float, default=10.0, help="批次间平均间隔秒数（默认10）")
+    parser.add_argument("--concurrency", "-c", type=int, default=1, help="并发会话数（默认1）")
     parser.add_argument("--persona", type=str, default=None, help="指定用户角色名（模糊匹配）")
     args = parser.parse_args()
 
@@ -391,7 +402,7 @@ if __name__ == "__main__":
             print(f"使用角色: {[p.name for p in PERSONAS]}")
 
     try:
-        asyncio.run(main(args.runs, args.interval))
+        asyncio.run(main(args.runs, args.interval, args.concurrency))
     except KeyboardInterrupt:
         print(metrics.summary())
         print("\n已中断。")
