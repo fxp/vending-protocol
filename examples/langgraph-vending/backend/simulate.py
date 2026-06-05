@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re as _re
 import random
 import sys
 import time
@@ -197,7 +198,7 @@ async def run_session(persona: Persona, opening_message: str, run_id: int) -> di
     else:
         first_msg = opening_message
 
-    max_turns = 12  # prevent infinite loops
+    max_turns = 14  # prevent infinite loops
     turn = 0
     last_ai_text = ""
 
@@ -219,8 +220,10 @@ async def run_session(persona: Persona, opening_message: str, run_id: int) -> di
 
             # --- Detect terminal states ---
 
-            # Success: pickup code in response
-            if any(kw in last_ai_text for kw in ["取货码", "pickup_code", "出货", "已出货", "商品已"]):
+            # Success: pickup code pattern (e.g. KXQO_HO4) or "取货码：XXXX" without "无法"
+            pickup_pattern = bool(_re.search(r"[A-Z0-9]{4}_[A-Z0-9]{3}", last_ai_text))
+            has_code_word = "取货码" in last_ai_text and "无法" not in last_ai_text
+            if pickup_pattern or has_code_word or "awaiting_pickup" in last_ai_text:
                 result["success"] = True
                 print(f"  ✅ 购买成功！")
                 break
@@ -230,37 +233,53 @@ async def run_session(persona: Persona, opening_message: str, run_id: int) -> di
                 result["out_of_stock"] = True
 
             # Preorder created
-            if any(kw in last_ai_text for kw in ["预订", "登记预订", "预订单"]):
+            if "已为您登记预订" in last_ai_text or "预订单已创建" in last_ai_text:
                 result["preorder"] = True
-                print(f"  📋 预订单已创建")
+                print(f"  \U0001f4cb 预订单已创建")
                 break
 
-            # Payment confirmation needed — auto-confirm
-            if any(kw in last_ai_text for kw in [
-                "确认购买", "请确认", "是否购买", "确认支付",
-                "总价", "¥", "元", "费用"
-            ]):
-                confirm = random.choice(AUTO_CONFIRM)
-                messages = [HumanMessage(content=confirm)]
+            # Persistent failure — give up
+            if last_ai_text.count("无法") >= 3 or "系统故障" in last_ai_text:
+                result["error"] = True
+                print(f"  ❌ 系统持续错误")
+                break
+
+            # Agent presenting a list and asking user to choose an item
+            needs_selection = any(kw in last_ai_text for kw in [
+                "哪种", "哪一种", "哪款", "选择", "请选", "1.", "2.", "1️⃣", "2️⃣",
+                "经典", "无糖",
+            ]) and ("？" in last_ai_text or "?" in last_ai_text or "请" in last_ai_text)
+
+            if needs_selection:
+                # Try to extract first item name from numbered list
+                m = _re.search(r"[1①]\W{0,3}\*{0,2}([^\n*|]{2,15})\*{0,2}\W*¥", last_ai_text)
+                if m:
+                    name = m.group(1).strip()
+                    # Reduce to a short keyword
+                    for kw in ["经典", "无糖", "矿泉", "红牛", "可乐"]:
+                        if kw in name:
+                            reply = kw
+                            break
+                    else:
+                        reply = "1"
+                else:
+                    reply = "经典" if "经典" in last_ai_text else "1"
+                print(f"  [sim: 选 '{reply}']")
+                messages = [HumanMessage(content=reply)]
                 continue
 
-            # Error
-            if any(kw in last_ai_text for kw in ["错误", "失败", "device_unavailable", "无法"]):
-                result["error"] = True
-                print(f"  ❌ 遇到错误")
-                break
+            # Price/confirm prompt
+            if ("¥" in last_ai_text or "总价" in last_ai_text or "费用" in last_ai_text) and \
+               any(kw in last_ai_text for kw in ["确认", "是否", "支付", "购买"]):
+                messages = [HumanMessage(content=random.choice(AUTO_CONFIRM))]
+                continue
 
-            # If agent asks a question, provide a simple response
+            # Other question
             if "？" in last_ai_text or "?" in last_ai_text:
-                if "哪台" in last_ai_text or "哪个" in last_ai_text:
-                    # Agent asking which machine — give the persona's machine or first
-                    reply = persona.machine_id or "随便一台都行"
-                elif "多少" in last_ai_text or "数量" in last_ai_text:
-                    reply = "一个就好"
-                elif "折扣" in last_ai_text or "优惠" in last_ai_text:
-                    reply = "没有优惠码"
-                elif "取消" in last_ai_text:
-                    reply = "不取消，继续购买"
+                if "预订" in last_ai_text:
+                    reply = "好的，帮我预订"
+                elif "哪台" in last_ai_text or "哪个机器" in last_ai_text:
+                    reply = persona.machine_id or "随便一台"
                 else:
                     reply = "好的，继续"
                 messages = [HumanMessage(content=reply)]

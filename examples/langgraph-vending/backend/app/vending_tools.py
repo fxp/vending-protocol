@@ -101,15 +101,14 @@ async def find_item(keyword: str) -> dict:
 # --------------------------------------------------------------------------- #
 @tool
 async def get_ucp_token(user_id: str = "guest") -> dict:
-    """Get a UCP Bearer token for the given user_id (or 'guest').
-    Must be called before browse_catalog / create_checkout / complete_checkout.
-    Returns token string to pass to subsequent calls."""
+    """Get a UCP Bearer token. Must be called before browse_catalog / create_checkout /
+    complete_checkout. Returns token string to pass to subsequent calls."""
     r = await _client.post(
         f"{_UCP}/oauth/token",
         data={
             "grant_type": "client_credentials",
-            "client_id": user_id,
-            "client_secret": settings.ucp_client_secret,
+            "client_id": "demo",
+            "client_secret": "demo",
         },
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
@@ -137,13 +136,15 @@ async def browse_catalog(machine_id: str, token: str) -> dict:
     items_raw = data.get("items") or data.get("catalog") or []
     items = []
     for it in items_raw:
+        price_fen = it.get("price_fen") or it.get("price") or 0
+        qty = it.get("quantity_available") or it.get("qty") or 0
         items.append(
             {
                 "lane_id": it.get("lane_id") or it.get("id"),
                 "name": it.get("name") or it.get("title"),
-                "price": _fen_to_yuan(it.get("price_fen") or it.get("price") or 0),
-                "available": it.get("available", True),
-                "qty": it.get("qty"),
+                "price": _fen_to_yuan(price_fen),
+                "available": it.get("available", qty > 0),
+                "qty": qty,
             }
         )
     return {
@@ -168,16 +169,17 @@ async def create_vending_checkout(lane_id: str, token: str, buyer_email: str = "
     )
     data = r.json()
     session_id = data.get("checkout_session_id") or data.get("id")
-    total_fen = data.get("total_amount") or data.get("amount") or 0
+    total_fen = data.get("amount") or data.get("total_amount") or 0
+    item = data.get("item") or {}
     return {
         "checkout_session_id": session_id,
         "status": data.get("status"),
         "total": _fen_to_yuan(total_fen),
         "total_fen": total_fen,
         "currency": data.get("currency", "CNY"),
-        "item_name": data.get("item_name") or data.get("name"),
+        "item_name": item.get("name") or data.get("item_name"),
         "lane_id": lane_id,
-        "messages": data.get("messages", []),
+        "messages": [m.get("content", "") for m in data.get("messages", [])],
     }
 
 
