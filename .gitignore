@@ -7,3 +7,4 @@ __pycache__/
 .idea/
 .vscode/
 cloudflare/**/node_modules/
+examples/langgraph-vending/backend/.env
