@@ -1,0 +1,3 @@
+[submodule "agentic-commerce-skills"]
+	path = agentic-commerce-skills
+	url = https://github.com/fxp/agentic-commerce-skills.git
