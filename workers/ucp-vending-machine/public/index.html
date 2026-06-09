@@ -300,7 +300,7 @@ tr:hover td { background: var(--bg3); }
   <div class="nav-right">
     <span class="status-dot connecting" id="statusDot"></span>
     <span class="status-label" id="statusLabel">连接中</span>
-    <button class="btn-refresh" onclick="reconnectSSE()">↻ 重连</button>
+    <button class="btn-refresh" onclick="reconnectWS()">↻ 重连</button>
   </div>
 </nav>
 
@@ -379,8 +379,8 @@ tr:hover td { background: var(--bg3); }
     <div class="section-header">
       <span class="section-title">货道库存</span>
       <div class="tabs">
-        <button class="tab-btn active" id="tab-grid" onclick="switchTab('grid')">⊞ 网格视图</button>
-        <button class="tab-btn" id="tab-list" onclick="switchTab('list')">☰ 列表视图</button>
+        <button class="tab-btn active" id="tab-grid" onclick="switchTab('grid')">&#8862; 网格视图</button>
+        <button class="tab-btn" id="tab-list" onclick="switchTab('list')">&#9776; 列表视图</button>
       </div>
     </div>
     <div id="view-grid">
@@ -449,8 +449,8 @@ let allLanes    = [];
 let currentView = 'grid';
 let selectedMachine = 'vm-001';
 let trackedOrders = {};   // orderId → { data, events, sse, collapsed }
-let vmEvt = null;
-let scEvt = null;
+let vmWs = null;
+let scWs = null;
 const VM_BASE = 'https://ucp-vending-machine.fxp007.workers.dev';
 
 /* ── Machine selector ── */
@@ -471,7 +471,7 @@ function selectMachine(machineId) {
   if (nameEl) nameEl.textContent = `${machineId} · ${info.name || ''}`;
   const locEl = document.getElementById('machine-loc-display');
   if (locEl) locEl.textContent = info.location || '';
-  connectSSE();
+  connectWS();
 }
 
 /* ── Toast ── */
@@ -493,51 +493,42 @@ function setStatus(state) {
   if (label) label.textContent = state === 'connected' ? '实时' : state === 'connecting' ? '连接中' : '已断开';
 }
 
-function connectSSE() {
-  if (vmEvt) { vmEvt.close(); vmEvt = null; }
-  if (scEvt) { scEvt.close(); scEvt = null; }
+function connectWS() {
+  if (vmWs) { vmWs.close(); vmWs = null; }
+  if (scWs) { scWs.close(); scWs = null; }
   setStatus('connecting');
 
-  // VM SSE: catalog + discovery
-  vmEvt = new EventSource(VM_BASE + '/sse');
-  vmEvt.addEventListener('snapshot', e => {
+  // VM WebSocket: catalog + discovery
+  vmWs = new WebSocket(VM_BASE.replace('https://', 'wss://') + '/ws');
+  vmWs.onopen = () => setStatus('connected');
+  vmWs.onmessage = e => {
     const d = JSON.parse(e.data);
     if (d.discovery) renderDiscovery(d.discovery);
-    setStatus('connected');
-  });
-  vmEvt.addEventListener('catalog', e => {
-    const d = JSON.parse(e.data);
-    // catalog updates don't need a separate render for the dashboard
-  });
-  vmEvt.onerror = () => {
-    setStatus('disconnected');
-    vmEvt.close(); vmEvt = null;
-    setTimeout(connectSSE, 4000);
   };
+  vmWs.onclose = () => {
+    vmWs = null;
+    setStatus('disconnected');
+    setTimeout(connectWS, 4000);
+  };
+  vmWs.onerror = () => {};
 
-  // SC SSE: inventory + daily-order (scoped to current machine)
-  scEvt = new EventSource(SC_BASE + '/sse?machine_id=' + encodeURIComponent(selectedMachine));
-  scEvt.addEventListener('snapshot', e => {
+  // SC WebSocket: inventory + daily-order (broadcasts all machines; client filters)
+  scWs = new WebSocket(SC_BASE.replace('https://', 'wss://') + '/ws');
+  scWs.onmessage = e => {
     const d = JSON.parse(e.data);
     const inv = (d.inv_by_machine && d.inv_by_machine[selectedMachine]) || d.inventory || [];
     allLanes = Array.isArray(inv) ? inv : [];
     renderKPIs(); renderGrid(); renderList(); renderRestock();
     if (d.preview) renderDailyOrder(d.preview);
-    setStatus('connected');
-  });
-  scEvt.addEventListener('update', e => {
-    const d = JSON.parse(e.data);
-    const inv = (d.inv_by_machine && d.inv_by_machine[selectedMachine]) || d.inventory || [];
-    allLanes = Array.isArray(inv) ? inv : [];
-    renderKPIs(); renderGrid(); renderList(); renderRestock();
-    if (d.preview) renderDailyOrder(d.preview);
-  });
-  scEvt.onerror = () => {};
+    if (d.type === 'snapshot') setStatus('connected');
+  };
+  scWs.onclose = () => { scWs = null; };
+  scWs.onerror = () => {};
 }
 
-function reconnectSSE() { connectSSE(); }
+function reconnectWS() { connectWS(); }
 
-function manualRefresh() { connectSSE(); }
+function manualRefresh() { connectWS(); }
 
 /* ── Fetch helpers ── */
 async function fetchJSON(url) {
@@ -546,8 +537,7 @@ async function fetchJSON(url) {
   return res.json();
 }
 
-/* ── refresh() kept as one-shot for SSE reconnects ── */
-async function refresh() { connectSSE(); }
+async function refresh() { connectWS(); }
 
 /* ── Discovery ── */
 function renderDiscovery(data) {
@@ -849,7 +839,7 @@ function pushEvent(orderId, evt) {
 
 const EVENT_ICONS = {
   accepted:    '⚙️',
-  door_open:   '🚪',
+  door_open:   '🚶',
   goods_taken: '🥤',
   completed:   '🎉',
   rejected:    '❌',
@@ -1012,7 +1002,7 @@ function escAttr(str) {
 }
 
 /* ── Init ── */
-connectSSE();
+connectWS();
 </script>
 </body>
 </html>

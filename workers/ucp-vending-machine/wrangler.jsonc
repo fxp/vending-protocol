@@ -1,30 +1,22 @@
 {
-  // Rename this file: cp wrangler.example.jsonc wrangler.jsonc
-  // Then fill in your account_id and kv_namespaces id.
   "name": "ucp-vending-machine",
   "main": "src/index.ts",
   "compatibility_date": "2024-09-23",
-
-  // Replace with your Cloudflare account ID
-  "account_id": "YOUR_ACCOUNT_ID",
-
+  "account_id": "0356d59ccdcff356bf3bbdb580bbaa60",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
   "kv_namespaces": [
-    {
-      "binding": "VM_KV",
-      // Replace with the KV namespace ID created via:
-      //   wrangler kv namespace create VM_KV
-      "id": "YOUR_KV_NAMESPACE_ID"
-    }
+    { "binding": "VM_KV", "id": "1887556a07b944529c611a87a3ab00d8" }
   ],
-
-  // Set secrets with:  wrangler secret put CLIENT_SECRET
-  // Env vars below are non-secret defaults; override via wrangler secrets for production.
+  "durable_objects": {
+    "bindings": [{ "name": "DASHBOARD", "class_name": "DashboardRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_classes": ["DashboardRoom"] }],
   "vars": {
     "CLIENT_ID":    "vending",
     "MACHINE_ID":   "vm-001",
     "MACHINE_NAME": "UCP Vending Machine"
-    // CLIENT_SECRET, HARDWARE_GATEWAY_URL, HARDWARE_GATEWAY_TOKEN → set as secrets
-  },
-
-  "triggers": {}
+  }
 }

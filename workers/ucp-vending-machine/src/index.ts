@@ -1,6 +1,7 @@
 export interface Env {
   VM_KV: KVNamespace;
   ASSETS: Fetcher;
+  DASHBOARD: DurableObjectNamespace;
   CLIENT_ID: string;
   CLIENT_SECRET: string;
   MACHINE_ID: string;
@@ -155,12 +156,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   const mid   = env.MACHINE_ID   || "vm-001";
   const mname = env.MACHINE_NAME || "UCP Vending Machine";
 
-  // ── Static assets (dashboard) ──────────────────────────────────────────
+  // ── Static assets (dashboard) ──────────────────────────────────────────────
   if (meth === "GET" && (path === "/" || path === "/dashboard")) {
     return env.ASSETS.fetch(new Request(`${url.origin}/index.html`, request));
   }
 
-  // ── Public endpoints ─────────────────────────────────────────────────
+  // ── Public endpoints ──────────────────────────────────────────────────────
   if (meth === "GET" && path === "/.well-known/ucp") {
     return json({
       version: "1.0",
@@ -179,52 +180,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return json({ status: "ok", machine_id: mid, time: nowIso() });
   }
 
-  // ── SSE dashboard stream (no auth required) ───────────────────────────────
-  if (meth === "GET" && path === "/sse") {
-    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-    const writer = writable.getWriter();
-    const enc    = (s: string) => new TextEncoder().encode(s);
-    const sse    = async (name: string, data: unknown) =>
-      writer.write(enc(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
-
-    (async () => {
-      try {
-        const getProducts = async () => {
-          const list  = await kv.list({ prefix: "product:" });
-          const items = await Promise.all(list.keys.map(k => kv.get(k.name)));
-          return items.filter(Boolean).map(v => JSON.parse(v!));
-        };
-
-        await sse("snapshot", {
-          catalog:   { products: await getProducts() },
-          discovery: {
-            version: "1.0",
-            merchant_id:   mid,
-            merchant_name: mname,
-            currency: "CNY",
-          },
-        });
-
-        for (let i = 0; i < 36; i++) {   // 36 × 10 s = 6 min
-          await new Promise(r => setTimeout(r, 10000));
-          const products = await getProducts();
-          await sse("catalog", { products, count: products.length });
-        }
-      } catch { /* client disconnected */ } finally {
-        await writer.close().catch(() => {});
-      }
-    })();
-
-    return new Response(readable, {
-      headers: {
-        "Content-Type":  "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
+  // ── WebSocket dashboard stream ────────────────────────────────────────────
+  if (meth === "GET" && path === "/ws") {
+    const id   = env.DASHBOARD.idFromName("main");
+    const stub = env.DASHBOARD.get(id);
+    return stub.fetch(request);
   }
 
-  // ── OAuth token ────────────────────────────────────────────────────
+  // ── OAuth token ───────────────────────────────────────────────────────────
   if (meth === "POST" && path === "/oauth/token") {
     let grantType = "", clientId = "", clientSecret = "";
     const ct = request.headers.get("Content-Type") ?? "";
@@ -249,7 +212,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return json({ access_token: token, token_type: "Bearer", expires_in: ttl });
   }
 
-  // ── Catalog (read public, write requires auth) ──────────────────────────────
+  // ── Catalog (read public, write requires auth) ─────────────────────────────────
   if (meth === "GET" && path === "/catalog") {
     const list     = await kv.list({ prefix: "product:" });
     const items    = await Promise.all(list.keys.map(k => kv.get(k.name)));
@@ -295,7 +258,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return apiErr("Unauthorized — POST /oauth/token to get a token", 401, "unauthorized");
   }
 
-  // ── Cart sessions ─────────────────────────────────────────────────────────
+  // ── Cart sessions ───────────────────────────────────────────────────────────
   if (meth === "POST" && path === "/cart-sessions") {
     const b     = await request.json() as Record<string, unknown>;
     const items = (b["items"] ?? []) as Array<{ product_id: string; qty?: number }>;
@@ -319,7 +282,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return json({ ucp: { version: "1.0" }, cart_session: cart, continue_url: `${url.origin}/checkout-sessions` }, 201);
   }
 
-  // ── Checkout sessions ────────────────────────────────────────────────────
+  // ── Checkout sessions ────────────────────────────────────────────────────────
   if (meth === "POST" && path === "/checkout-sessions") {
     const b = await request.json() as Record<string, unknown>;
     if (!b["cart_id"]) return apiErr("cart_id required");
@@ -380,7 +343,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return json({ ucp: { version: "1.0" }, order: { id: order.id, status, product_id: order.product_id, product_name: order.product_name, price_fen: order.price_fen, currency: order.currency, events: occurred, created_at: new Date(order.created_ms).toISOString() }, poll_url: `${url.origin}/orders/${order.id}`, events_url: `${url.origin}/orders/${order.id}/events` }, 201);
   }
 
-  // ── Orders ─────────────────────────────────────────────────────────────
+  // ── Orders ───────────────────────────────────────────────────────────────
   const orderGetMatch = path.match(/^\/orders\/([^/]+)$/);
   if (orderGetMatch && meth === "GET") {
     const val = await kv.get(`order:${orderGetMatch[1]}`);
@@ -390,7 +353,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return json({ ucp: { version: "1.0" }, order: { id: order.id, status, product_id: order.product_id, product_name: order.product_name, price_fen: order.price_fen, currency: order.currency, lane_id: order.lane_id, events: occurred, created_at: new Date(order.created_ms).toISOString() } });
   }
 
-  // ── SSE order events ────────────────────────────────────────────────────────
+  // ── SSE order events ─────────────────────────────────────────────────────────
   const orderEventsMatch = path.match(/^\/orders\/([^/]+)\/events$/);
   if (orderEventsMatch && meth === "GET") {
     const val = await kv.get(`order:${orderEventsMatch[1]}`);
@@ -430,3 +393,59 @@ export default {
     return handleRequest(request, env);
   },
 };
+
+export class DashboardRoom implements DurableObject {
+  constructor(private state: DurableObjectState, private env: Env) {}
+
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("Expected WebSocket upgrade", { status: 426 });
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
+    this.state.acceptWebSocket(server);
+
+    const snapshot = await this.buildData();
+    server.send(JSON.stringify({ type: "snapshot", ...snapshot }));
+
+    const alarm = await this.state.storage.getAlarm();
+    if (!alarm) await this.state.storage.setAlarm(Date.now() + 10000);
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async webSocketMessage(_ws: WebSocket, _msg: string | ArrayBuffer): Promise<void> {}
+
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    ws.close();
+    if (this.state.getWebSockets().length === 0) {
+      await this.state.storage.deleteAlarm();
+    }
+  }
+
+  webSocketError(ws: WebSocket, _err: unknown): void {
+    ws.close(1011, "error");
+  }
+
+  async alarm(): Promise<void> {
+    const sockets = this.state.getWebSockets();
+    if (!sockets.length) return;
+    const data = await this.buildData();
+    const msg  = JSON.stringify({ type: "update", ...data });
+    for (const ws of sockets) { try { ws.send(msg); } catch {} }
+    await this.state.storage.setAlarm(Date.now() + 10000);
+  }
+
+  private async buildData() {
+    const kv   = this.env.VM_KV;
+    const mid  = this.env.MACHINE_ID   || "vm-001";
+    const mname = this.env.MACHINE_NAME || "UCP Vending Machine";
+    const list = await kv.list({ prefix: "product:" });
+    const items = await Promise.all(list.keys.map(k => kv.get(k.name)));
+    const products = items.filter(Boolean).map(v => JSON.parse(v!));
+    return {
+      catalog:   { products, count: products.length },
+      discovery: { version: "1.0", merchant_id: mid, merchant_name: mname, currency: "CNY" },
+    };
+  }
+}
