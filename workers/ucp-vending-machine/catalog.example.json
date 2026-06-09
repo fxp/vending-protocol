@@ -1,0 +1,12 @@
+[
+  { "id": "water-500",    "name": "农夫山泉 500ml",    "price_fen": 200, "lane_id": "101", "available": true },
+  { "id": "green-tea-500","name": "东方树叶绿茶 500ml","price_fen": 500, "lane_id": "102", "available": true },
+  { "id": "cola-330",     "name": "可口可乐 330ml",    "price_fen": 350, "lane_id": "103", "available": true },
+  { "id": "coffee-250",   "name": "雀巢咖啡 250ml",    "price_fen": 600, "lane_id": "104", "available": true },
+  { "id": "juice-330",    "name": "美汁源橙汁 330ml",  "price_fen": 400, "lane_id": "105", "available": true },
+  { "id": "energy-330",   "name": "红牛 330ml",        "price_fen": 700, "lane_id": "106", "available": true },
+  { "id": "milk-250",     "name": "伊利牛奶 250ml",    "price_fen": 350, "lane_id": "201", "available": true, "_note": "lane 201 = slow dispense scenario" },
+  { "id": "oolong-500",   "name": "三得利乌龙茶 500ml","price_fen": 450, "lane_id": "202", "available": true },
+  { "id": "sold-out",     "name": "已售罄测试商品",     "price_fen": 100, "lane_id": "900", "available": true,  "_note": "lane 900 = empty lane scenario" },
+  { "id": "offline-dev",  "name": "离线设备测试商品",   "price_fen": 100, "lane_id": "901", "available": true,  "_note": "lane 901 = offline device scenario" }
+]
