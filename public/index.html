@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>贩卖机 Dashboard</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:       #0d1117;
+  --bg2:      #161b22;
+  --bg3:      #21262d;
+  --border:   #30363d;
+  --text:     #e6edf3;
+  --muted:    #8b949e;
+  --blue:     #58a6ff;
+  --blue-bg:  #1a3a5c;
+  --green:    #3fb950;
+  --green-bg: #1a3a1a;
+  --yellow:   #d29922;
+  --yellow-bg:#3b2f00;
+  --red:      #f85149;
+  --red-bg:   #3d1a1a;
+  --radius:   10px;
+}
+html, body { min-height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+
+/* ── Nav ── */
+nav {
+  display: flex; align-items: center; gap: 0; padding: 0 24px;
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  height: 52px; position: sticky; top: 0; z-index: 100;
+}
+.nav-brand { font-size: 15px; font-weight: 700; color: var(--text); margin-right: 28px; display: flex; align-items: center; gap: 8px; }
+.nav-brand span { font-size: 18px; }
+.nav-links { display: flex; gap: 4px; }
+.nav-links a {
+  padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 500;
+  color: var(--muted); text-decoration: none; transition: background .15s, color .15s;
+}
+.nav-links a:hover { background: var(--bg3); color: var(--text); }
+.nav-links a.active { background: var(--blue-bg); color: var(--blue); }
+.nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted); display: inline-block; flex-shrink: 0;
+  transition: background .4s;
+}
+.status-dot.connected    { background: var(--green); box-shadow: 0 0 5px var(--green); }
+.status-dot.connecting   { background: var(--yellow); animation: blink .7s infinite; }
+.status-dot.disconnected { background: var(--red);    animation: blink .7s infinite; }
+.status-label { font-size: 11px; color: var(--muted); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+.btn-refresh {
+  padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--text); font-size: 12px; cursor: pointer;
+  transition: background .15s;
+}
+.btn-refresh:hover { background: var(--border); }
+
+/* ── Page ── */
+.page { max-width: 1280px; margin: 0 auto; padding: 20px 24px 40px; }
+
+/* ── Section ── */
+.section-title { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+
+/* ── Card ── */
+.card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 20px;
+}
+
+/* ── Machine Status Bar ── */
+.machine-bar {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  margin-bottom: 18px;
+}
+.machine-left { display: flex; align-items: center; gap: 14px; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(63,185,80,.2); flex-shrink: 0; animation: glow 2s ease-in-out infinite; }
+@keyframes glow { 0%,100%{box-shadow:0 0 0 3px rgba(63,185,80,.2)} 50%{box-shadow:0 0 0 6px rgba(63,185,80,.1)} }
+.machine-name { font-size: 16px; font-weight: 700; }
+.machine-type { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.machine-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.machine-meta { font-size: 12px; color: var(--muted); }
+.machine-meta strong { color: var(--text); }
+.payment-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.badge {
+  font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 20px;
+  white-space: nowrap;
+}
+.badge-blue   { background: var(--blue-bg);   color: var(--blue);   }
+.badge-green  { background: var(--green-bg);  color: var(--green);  }
+.badge-yellow { background: var(--yellow-bg); color: var(--yellow); }
+.badge-red    { background: var(--red-bg);    color: var(--red);    }
+.badge-muted  { background: var(--bg3); color: var(--muted); }
+.status-label { font-size: 13px; font-weight: 600; color: var(--green); }
+
+/* ── KPI Row ── */
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+@media(max-width:700px){ .kpi-row { grid-template-columns: repeat(2,1fr); } }
+.kpi-card { text-align: center; padding: 16px 12px; }
+.kpi-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.kpi-value { font-size: 28px; font-weight: 700; line-height: 1; }
+.kpi-value.red    { color: var(--red); }
+.kpi-value.green  { color: var(--green); }
+.kpi-value.yellow { color: var(--yellow); }
+.kpi-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+/* ── Tabs ── */
+.tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+.tab-btn {
+  padding: 6px 16px; border-radius: 6px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted); font-size: 13px; cursor: pointer;
+  transition: all .15s;
+}
+.tab-btn.active { background: var(--blue-bg); color: var(--blue); border-color: var(--blue-bg); }
+
+/* ── Grid view ── */
+.lane-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+}
+@media(max-width:1000px){ .lane-grid { grid-template-columns: repeat(4,1fr); } }
+@media(max-width:750px){ .lane-grid { grid-template-columns: repeat(3,1fr); } }
+@media(max-width:500px){ .lane-grid { grid-template-columns: repeat(2,1fr); } }
+
+.lane-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px; position: relative; overflow: hidden;
+  transition: border-color .15s;
+}
+.lane-card:hover { border-color: var(--muted); }
+.lane-card.low-stock { border-color: var(--red); }
+.lane-card.out-of-stock::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(
+    135deg, transparent, transparent 6px,
+    rgba(248,81,73,.06) 6px, rgba(248,81,73,.06) 12px
+  );
+}
+.lane-location {
+  position: absolute; top: 8px; right: 8px;
+  font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  background: var(--bg3); color: var(--muted);
+}
+.lane-warn {
+  position: absolute; top: 8px; left: 8px;
+  font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  background: var(--red-bg); color: var(--red);
+}
+.lane-name { font-size: 13px; font-weight: 600; margin-top: 24px; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.progress-wrap { height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; margin-bottom: 5px; }
+.progress-bar { height: 100%; border-radius: 3px; transition: width .4s; }
+.progress-green  { background: var(--green); }
+.progress-yellow { background: var(--yellow); }
+.progress-red    { background: var(--red); }
+.lane-qty { font-size: 12px; color: var(--muted); }
+
+/* ── List view ── */
+.lane-table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 9px 10px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--bg3); }
+.inline-bar-wrap { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+.inline-bar-bg { flex: 1; height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
+.inline-bar-fill { height: 100%; border-radius: 3px; }
+.inline-qty { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* ── Order Tracker ── */
+.order-input-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.order-input {
+  flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--text); font-size: 13px; outline: none;
+}
+.order-input:focus { border-color: var(--blue); }
+.btn-primary {
+  padding: 8px 16px; border-radius: 6px; border: none;
+  background: var(--blue); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: opacity .15s; white-space: nowrap;
+}
+.btn-primary:hover { opacity: .85; }
+.btn-sm {
+  padding: 5px 10px; border-radius: 5px; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--text); font-size: 12px; cursor: pointer;
+}
+.btn-sm:hover { background: var(--border); }
+.btn-danger {
+  padding: 5px 10px; border-radius: 5px; border: 1px solid var(--red-bg);
+  background: var(--red-bg); color: var(--red); font-size: 12px; cursor: pointer;
+}
+.order-cards { display: flex; flex-direction: column; gap: 10px; }
+.order-card {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden;
+}
+.order-card-header {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  cursor: pointer; user-select: none;
+}
+.order-card-header:hover { background: rgba(255,255,255,.03); }
+.order-card-id { font-size: 12px; font-weight: 700; color: var(--blue); font-family: monospace; }
+.order-status-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+.order-card-toggle { margin-left: auto; color: var(--muted); font-size: 12px; }
+.order-card-body { padding: 0 14px 14px; border-top: 1px solid var(--border); }
+.order-meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+.order-meta-item { font-size: 12px; }
+.order-meta-label { color: var(--muted); margin-bottom: 2px; }
+.order-meta-value { font-weight: 600; }
+.redeem-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.redeem-input {
+  flex: 1; padding: 6px 10px; border-radius: 5px; border: 1px solid var(--border);
+  background: var(--bg2); color: var(--text); font-size: 12px; outline: none; font-family: monospace;
+}
+.redeem-input:focus { border-color: var(--blue); }
+.event-timeline { display: flex; flex-direction: column; gap: 6px; }
+.event-item {
+  display: flex; align-items: flex-start; gap: 8px; font-size: 12px; padding: 6px 10px;
+  background: var(--bg2); border-radius: 6px; border: 1px solid var(--border);
+}
+.event-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+.event-content { flex: 1; }
+.event-type { font-weight: 600; color: var(--text); }
+.event-time { color: var(--muted); font-size: 11px; }
+.event-detail { color: var(--muted); margin-top: 2px; }
+.empty-state { text-align: center; padding: 24px; color: var(--muted); font-size: 13px; }
+
+/* ── Restock ── */
+.restock-list { display: flex; flex-direction: column; gap: 8px; }
+.restock-item {
+  display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+}
+.restock-location { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 4px; background: var(--bg2); color: var(--muted); flex-shrink: 0; }
+.restock-name { font-weight: 600; flex: 1; }
+.restock-qty { font-size: 12px; color: var(--red); font-weight: 600; white-space: nowrap; }
+.restock-suggest { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.restock-link { font-size: 12px; color: var(--blue); text-decoration: none; }
+.restock-link:hover { text-decoration: underline; }
+.all-good { display: flex; align-items: center; gap: 8px; justify-content: center; padding: 20px; color: var(--green); font-size: 13px; }
+
+/* ── Daily Order ── */
+.supplier-group {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; margin-bottom: 8px;
+}
+.supplier-name { font-weight: 600; flex: 1; }
+.supplier-items { font-size: 12px; color: var(--muted); }
+.supplier-cost { font-size: 13px; font-weight: 600; color: var(--blue); }
+.daily-footer { margin-top: 12px; text-align: center; }
+.daily-footer a { color: var(--blue); text-decoration: none; font-size: 13px; }
+.daily-footer a:hover { text-decoration: underline; }
+
+/* ── Toast ── */
+.toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  background: var(--bg2); border: 1px solid var(--red); color: var(--text);
+  padding: 10px 16px; border-radius: 8px; font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4); max-width: 320px;
+  animation: slideIn .2s ease;
+}
+@keyframes slideIn { from{transform:translateX(20px);opacity:0} to{transform:none;opacity:1} }
+
+/* ── Machine Selector ── */
+.machine-selector-row {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 18px; flex-wrap: wrap;
+}
+.machine-selector-label { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+.machine-btn {
+  padding: 7px 16px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--muted); font-size: 13px; cursor: pointer;
+  transition: all .15s; text-align: left;
+}
+.machine-btn:hover { border-color: var(--blue); color: var(--text); }
+.machine-btn.active { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
+.machine-btn .btn-machine-name { font-weight: 600; display: block; }
+.machine-btn .btn-machine-loc { font-size: 11px; color: var(--muted); display: block; margin-top: 1px; }
+.machine-btn.active .btn-machine-loc { color: var(--blue); opacity: .8; }
+
+/* ── Utility ── */
+.row { margin-bottom: 20px; }
+.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.loading { color: var(--muted); font-size: 13px; padding: 16px 0; text-align: center; }
+.sse-indicator { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; animation: pulse .8s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-brand"><span>🏪</span> 贩卖机 Dashboard</div>
+  <div class="nav-links">
+    <a href="/" >Kiosk</a>
+    <a href="/vending" class="active">贩卖机</a>
+    <a href="/supplier">供应链</a>
+  </div>
+  <div class="nav-right">
+    <span class="status-dot connecting" id="statusDot"></span>
+    <span class="status-label" id="statusLabel">连接中</span>
+    <button class="btn-refresh" onclick="reconnectWS()">↻ 重连</button>
+  </div>
+</nav>
+
+<div class="page">
+
+  <!-- Machine Selector -->
+  <div class="row">
+    <div class="card">
+      <div class="machine-selector-row">
+        <span class="machine-selector-label">选择贩卖机：</span>
+        <button class="machine-btn active" id="btn-vm-001" onclick="selectMachine('vm-001')">
+          <span class="btn-machine-name">vm-001 · 1楼大厅</span>
+          <span class="btn-machine-loc">1F Main Hall</span>
+        </button>
+        <button class="machine-btn" id="btn-vm-002" onclick="selectMachine('vm-002')">
+          <span class="btn-machine-name">vm-002 · 2楼会议区</span>
+          <span class="btn-machine-loc">2F Conference Wing</span>
+        </button>
+        <button class="machine-btn" id="btn-vm-003" onclick="selectMachine('vm-003')">
+          <span class="btn-machine-name">vm-003 · 地下停车场</span>
+          <span class="btn-machine-loc">B1 Parking</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Machine Status -->
+  <div class="row">
+    <div class="card machine-bar" id="machine-bar">
+      <div class="machine-left">
+        <div class="status-dot" id="machine-dot"></div>
+        <div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="machine-name" id="machine-name-display">vm-001 · 1楼大厅</span>
+            <span class="status-label" id="machine-status-label">在线</span>
+          </div>
+          <div class="machine-type" id="machine-type">正在加载...</div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--muted)" id="machine-loc-display">1F Main Hall</div>
+      <div class="machine-right">
+        <div class="machine-meta">UCP版本 <strong id="ucp-version">—</strong></div>
+        <div class="payment-badges" id="payment-badges"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- KPI Row -->
+  <div class="kpi-row row">
+    <div class="card kpi-card">
+      <div class="kpi-label">货道总数</div>
+      <div class="kpi-value" id="kpi-total">—</div>
+      <div class="kpi-sub">lanes</div>
+    </div>
+    <div class="card kpi-card">
+      <div class="kpi-label" style="display:flex;align-items:center;gap:6px;justify-content:center">
+        库存预警 <span id="kpi-warn-dot" style="width:7px;height:7px;border-radius:50%;background:var(--muted);display:inline-block"></span>
+      </div>
+      <div class="kpi-value" id="kpi-warn">—</div>
+      <div class="kpi-sub">低库存货道</div>
+    </div>
+    <div class="card kpi-card">
+      <div class="kpi-label">总在库商品</div>
+      <div class="kpi-value" id="kpi-qty">—</div>
+      <div class="kpi-sub">units</div>
+    </div>
+    <div class="card kpi-card">
+      <div class="kpi-label">库存饱和度</div>
+      <div class="kpi-value" id="kpi-sat">—</div>
+      <div class="kpi-sub" id="kpi-sat-sub">total / capacity</div>
+    </div>
+  </div>
+
+  <!-- Inventory Lanes -->
+  <div class="row">
+    <div class="section-header">
+      <span class="section-title">货道库存</span>
+      <div class="tabs">
+        <button class="tab-btn active" id="tab-grid" onclick="switchTab('grid')">&#8862; 网格视图</button>
+        <button class="tab-btn" id="tab-list" onclick="switchTab('list')">&#9776; 列表视图</button>
+      </div>
+    </div>
+    <div id="view-grid">
+      <div class="lane-grid" id="lane-grid"><div class="loading">正在加载货道数据...</div></div>
+    </div>
+    <div id="view-list" style="display:none">
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="lane-table-wrap">
+          <table id="lane-table">
+            <thead>
+              <tr>
+                <th>位置</th><th>商品名</th><th>SKU</th><th>库存</th><th>状态</th><th>最后补货</th>
+              </tr>
+            </thead>
+            <tbody id="lane-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Order Tracker -->
+  <div class="row">
+    <div class="section-title">实时订单追踪</div>
+    <div class="order-input-row">
+      <input class="order-input" id="order-id-input" placeholder="输入订单 ID 或粘贴完整 URL…" onkeydown="if(event.key==='Enter')trackOrderFromInput()">
+      <button class="btn-primary" onclick="trackOrderFromInput()">追踪</button>
+    </div>
+    <div class="order-cards" id="order-cards">
+      <div class="empty-state" id="order-empty">暂无追踪订单 — 输入订单 ID 开始追踪</div>
+    </div>
+  </div>
+
+  <!-- Restock -->
+  <div class="row">
+    <div class="section-header">
+      <span class="section-title">补货提醒</span>
+      <a href="/supplier" class="restock-link">联系供应商 →</a>
+    </div>
+    <div class="card" id="restock-section">
+      <div class="loading">正在加载...</div>
+    </div>
+  </div>
+
+  <!-- Daily Order -->
+  <div class="row">
+    <div class="section-title">今日采购计划</div>
+    <div class="card" id="daily-order-section">
+      <div class="loading">正在加载...</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+/* ── Constants ── */
+const SC_BASE         = 'https://vending-supply-chain.fxp007.workers.dev';
+const DISCOVERY_URL   = 'https://ucp-vending-machine.fxp007.workers.dev/.well-known/ucp';
+const ORDER_BASE      = 'https://ucp-vending-machine.fxp007.workers.dev/orders';
+const MAX_ORDERS      = 5;
+
+/* ── State ── */
+let allLanes    = [];
+let currentView = 'grid';
+let selectedMachine = 'vm-001';
+let trackedOrders = {};   // orderId → { data, events, sse, collapsed }
+let vmWs = null;
+let scWs = null;
+const VM_BASE = 'https://ucp-vending-machine.fxp007.workers.dev';
+
+/* ── Machine selector ── */
+const MACHINES = {
+  'vm-001': { name: '1楼大厅', location: '1F Main Hall' },
+  'vm-002': { name: '2楼会议区', location: '2F Conference Wing' },
+  'vm-003': { name: '地下停车场', location: 'B1 Parking' },
+};
+
+function selectMachine(machineId) {
+  selectedMachine = machineId;
+  Object.keys(MACHINES).forEach(id => {
+    const btn = document.getElementById('btn-' + id);
+    if (btn) btn.className = 'machine-btn' + (id === machineId ? ' active' : '');
+  });
+  const info = MACHINES[machineId] || {};
+  const nameEl = document.getElementById('machine-name-display');
+  if (nameEl) nameEl.textContent = `${machineId} · ${info.name || ''}`;
+  const locEl = document.getElementById('machine-loc-display');
+  if (locEl) locEl.textContent = info.location || '';
+  connectWS();
+}
+
+/* ── Toast ── */
+function showToast(msg) {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+/* ── SSE connection ── */
+
+function setStatus(state) {
+  const dot   = document.getElementById('statusDot');
+  const label = document.getElementById('statusLabel');
+  if (dot)   dot.className   = 'status-dot ' + state;
+  if (label) label.textContent = state === 'connected' ? '实时' : state === 'connecting' ? '连接中' : '已断开';
+}
+
+function connectWS() {
+  if (vmWs) { vmWs.close(); vmWs = null; }
+  if (scWs) { scWs.close(); scWs = null; }
+  setStatus('connecting');
+
+  // VM WebSocket: catalog + discovery
+  vmWs = new WebSocket(VM_BASE.replace('https://', 'wss://') + '/ws');
+  vmWs.onopen = () => setStatus('connected');
+  vmWs.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.discovery) renderDiscovery(d.discovery);
+  };
+  vmWs.onclose = () => {
+    vmWs = null;
+    setStatus('disconnected');
+    setTimeout(connectWS, 4000);
+  };
+  vmWs.onerror = () => {};
+
+  // SC WebSocket: inventory + daily-order (broadcasts all machines; client filters)
+  scWs = new WebSocket(SC_BASE.replace('https://', 'wss://') + '/ws');
+  scWs.onmessage = e => {
+    const d = JSON.parse(e.data);
+    const inv = (d.inv_by_machine && d.inv_by_machine[selectedMachine]) || d.inventory || [];
+    allLanes = Array.isArray(inv) ? inv : [];
+    renderKPIs(); renderGrid(); renderList(); renderRestock();
+    if (d.preview) renderDailyOrder(d.preview);
+    if (d.type === 'snapshot') setStatus('connected');
+  };
+  scWs.onclose = () => { scWs = null; };
+  scWs.onerror = () => {};
+}
+
+function reconnectWS() { connectWS(); }
+
+function manualRefresh() { connectWS(); }
+
+/* ── Fetch helpers ── */
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+  return res.json();
+}
+
+async function refresh() { connectWS(); }
+
+/* ── Discovery ── */
+function renderDiscovery(data) {
+  // Flatten: data might be nested under a key or flat
+  const machine = data.machine || data;
+  const ucp     = data.ucp || data;
+
+  document.getElementById('machine-type').textContent =
+    machine.device_type || machine.type || ucp.device_type || '自动贩卖机';
+
+  const version = ucp.version || ucp.ucp_version || (ucp.protocol && ucp.protocol.version) || '—';
+  document.getElementById('ucp-version').textContent = version;
+
+  // Payment methods
+  const methods = ucp.payment_methods || machine.payment_methods || [];
+  const methodLabels = {
+    alipay_aipay: { label: 'Alipay', cls: 'badge-blue' },
+    alipay:       { label: 'Alipay', cls: 'badge-blue' },
+    google_pay:   { label: 'Google Pay', cls: 'badge-green' },
+    prepaid:      { label: 'Prepaid', cls: 'badge-yellow' },
+  };
+  const badgeEl = document.getElementById('payment-badges');
+  badgeEl.innerHTML = '';
+  const seen = new Set();
+  methods.forEach(m => {
+    const key = typeof m === 'string' ? m : (m.type || m.id || '');
+    if (seen.has(key)) return;
+    seen.add(key);
+    const info = methodLabels[key] || { label: key, cls: 'badge-muted' };
+    const b = document.createElement('span');
+    b.className = `badge ${info.cls}`;
+    b.textContent = info.label;
+    badgeEl.appendChild(b);
+  });
+}
+
+/* ── KPIs ── */
+function renderKPIs() {
+  const total    = allLanes.length;
+  const lowCount = allLanes.filter(l => l.low_stock).length;
+  const totalQty = allLanes.reduce((s, l) => s + (l.qty || 0), 0);
+  const totalCap = allLanes.reduce((s, l) => s + (l.capacity || 0), 0);
+  const sat      = totalCap > 0 ? Math.round(totalQty / totalCap * 100) : 0;
+
+  document.getElementById('kpi-total').textContent = total;
+
+  const warnEl  = document.getElementById('kpi-warn');
+  const warnDot = document.getElementById('kpi-warn-dot');
+  warnEl.textContent = lowCount;
+  if (lowCount > 0) {
+    warnEl.className = 'kpi-value red';
+    warnDot.style.background = 'var(--red)';
+  } else {
+    warnEl.className = 'kpi-value green';
+    warnDot.style.background = 'var(--green)';
+  }
+
+  document.getElementById('kpi-qty').textContent = totalQty;
+
+  const satEl = document.getElementById('kpi-sat');
+  satEl.textContent = sat + '%';
+  satEl.className = sat >= 70 ? 'kpi-value green' : sat >= 40 ? 'kpi-value yellow' : 'kpi-value red';
+  document.getElementById('kpi-sat-sub').textContent = `${totalQty} / ${totalCap}`;
+}
+
+/* ── Progress color ── */
+function progressClass(pct) {
+  if (pct >= 50) return 'progress-green';
+  if (pct >= 25) return 'progress-yellow';
+  return 'progress-red';
+}
+
+/* ── Grid view ── */
+function renderGrid() {
+  const grid = document.getElementById('lane-grid');
+  if (!allLanes.length) { grid.innerHTML = '<div class="empty-state">暂无货道数据</div>'; return; }
+  grid.innerHTML = '';
+  allLanes.forEach(lane => {
+    const pct  = lane.capacity > 0 ? Math.round(lane.qty / lane.capacity * 100) : 0;
+    const cls  = (lane.low_stock ? ' low-stock' : '') + (lane.qty === 0 ? ' out-of-stock' : '');
+    const card = document.createElement('div');
+    card.className = 'lane-card' + cls;
+    card.innerHTML = `
+      ${lane.low_stock ? '<span class="lane-warn">⚠️ 补货</span>' : ''}
+      <span class="lane-location">${lane.location || lane.lane_id || ''}</span>
+      <div class="lane-name" title="${escHtml(lane.name || '')}">${escHtml(lane.name || '—')}</div>
+      <div class="progress-wrap"><div class="progress-bar ${progressClass(pct)}" style="width:${pct}%"></div></div>
+      <div class="lane-qty">${lane.qty} / ${lane.capacity}</div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+/* ── List view ── */
+function renderList() {
+  const tbody = document.getElementById('lane-tbody');
+  tbody.innerHTML = '';
+  allLanes.forEach(lane => {
+    const pct = lane.capacity > 0 ? Math.round(lane.qty / lane.capacity * 100) : 0;
+    const tr  = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span style="font-size:12px;font-weight:700;padding:2px 7px;border-radius:4px;background:var(--bg3);color:var(--muted)">${escHtml(lane.location || lane.lane_id || '')}</span></td>
+      <td>${escHtml(lane.name || '—')}</td>
+      <td style="font-family:monospace;font-size:12px;color:var(--muted)">${escHtml(lane.sku_id || '—')}</td>
+      <td>
+        <div class="inline-bar-wrap">
+          <div class="inline-bar-bg"><div class="inline-bar-fill ${progressClass(pct)}" style="width:${pct}%"></div></div>
+          <span class="inline-qty">${lane.qty}/${lane.capacity}</span>
+        </div>
+      </td>
+      <td>${lane.low_stock ? '<span class="badge badge-red">低库存</span>' : '<span class="badge badge-green">正常</span>'}</td>
+      <td style="font-size:12px;color:var(--muted)">${lane.last_restocked_at ? new Date(lane.last_restocked_at).toLocaleString('zh-CN') : '—'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+/* ── Tab switch ── */
+function switchTab(tab) {
+  currentView = tab;
+  document.getElementById('view-grid').style.display = tab === 'grid' ? '' : 'none';
+  document.getElementById('view-list').style.display = tab === 'list' ? '' : 'none';
+  document.getElementById('tab-grid').className = 'tab-btn' + (tab === 'grid' ? ' active' : '');
+  document.getElementById('tab-list').className = 'tab-btn' + (tab === 'list' ? ' active' : '');
+}
+
+/* ── Restock section ── */
+function renderRestock() {
+  const low = allLanes.filter(l => l.low_stock);
+  const sec = document.getElementById('restock-section');
+  if (!low.length) {
+    sec.innerHTML = '<div class="all-good">✅ 所有货道库存充足</div>';
+    return;
+  }
+  sec.innerHTML = '<div class="restock-list" id="restock-list"></div>';
+  const list = document.getElementById('restock-list');
+  low.forEach(lane => {
+    const suggest = lane.capacity - lane.qty;
+    const item = document.createElement('div');
+    item.className = 'restock-item';
+    item.innerHTML = `
+      <span class="restock-location">${escHtml(lane.location || lane.lane_id || '')}</span>
+      <span class="restock-name">${escHtml(lane.name || '—')}</span>
+      <span class="restock-qty">当前 ${lane.qty} / 最低 ${lane.min_qty}</span>
+      <span class="restock-suggest">建议补货 +${suggest}</span>
+      <a href="/supplier" class="restock-link">联系供应商</a>
+    `;
+    list.appendChild(item);
+  });
+}
+
+/* ── Daily Order ── */
+function renderDailyOrder(data) {
+  const sec = document.getElementById('daily-order-section');
+  const items  = Array.isArray(data) ? data : (data.items || data.suggestions || data.orders || []);
+  const bySupplier = {};
+  items.forEach(item => {
+    const sup = item.supplier_name || item.supplier || '未知供应商';
+    if (!bySupplier[sup]) bySupplier[sup] = { items: 0, cost: 0, meets: true };
+    bySupplier[sup].items += 1;
+    bySupplier[sup].cost  += (item.total_cost || item.cost || 0);
+    if (item.meets_minimum === false) bySupplier[sup].meets = false;
+  });
+  const suppliers = Object.entries(bySupplier);
+  if (!suppliers.length) {
+    sec.innerHTML = '<div class="empty-state">今日暂无采购建议</div>';
+    return;
+  }
+  let html = '';
+  suppliers.forEach(([name, info]) => {
+    const meetsBadge = info.meets
+      ? '<span class="badge badge-green">达到最低起订</span>'
+      : '<span class="badge badge-yellow">未达起订量</span>';
+    html += `<div class="supplier-group">
+      <span class="supplier-name">${escHtml(name)}</span>
+      <span class="supplier-items">${info.items} 个商品</span>
+      <span class="supplier-cost">¥${info.cost.toFixed(2)}</span>
+      ${meetsBadge}
+    </div>`;
+  });
+  html += `<div class="daily-footer"><a href="/supplier">前往供应链管理 →</a></div>`;
+  sec.innerHTML = html;
+}
+
+/* ── Order Tracker ── */
+function extractOrderId(raw) {
+  const trimmed = raw.trim();
+  try {
+    const url = new URL(trimmed);
+    const parts = url.pathname.split('/').filter(Boolean);
+    const idx = parts.indexOf('orders');
+    if (idx !== -1 && parts[idx + 1]) return parts[idx + 1];
+    return parts[parts.length - 1] || trimmed;
+  } catch (_) {
+    return trimmed;
+  }
+}
+
+function trackOrderFromInput() {
+  const input = document.getElementById('order-id-input');
+  const raw   = input.value;
+  if (!raw.trim()) { showToast('请输入订单 ID'); return; }
+  const orderId = extractOrderId(raw);
+  input.value = '';
+  if (trackedOrders[orderId]) {
+    showToast('该订单已在追踪中');
+    return;
+  }
+  startTrackingOrder(orderId);
+}
+
+async function startTrackingOrder(orderId) {
+  // Evict oldest if exceed limit
+  const ids = Object.keys(trackedOrders);
+  if (ids.length >= MAX_ORDERS) {
+    const oldest = ids[0];
+    stopTrackingOrder(oldest);
+  }
+
+  trackedOrders[orderId] = { events: [], sse: null, collapsed: false, data: null };
+  renderOrderCard(orderId);
+
+  // Fetch initial order data
+  try {
+    const data = await fetchJSON(`${ORDER_BASE}/${orderId}`);
+    trackedOrders[orderId].data = data;
+    updateOrderCard(orderId);
+  } catch (e) {
+    showToast(`订单 ${orderId} 加载失败: ${e.message}`);
+  }
+
+  // Open SSE
+  openSSE(orderId);
+}
+
+function openSSE(orderId) {
+  const url = `${ORDER_BASE}/${orderId}/events`;
+  const es  = new EventSource(url);
+  trackedOrders[orderId].sse = es;
+
+  es.onmessage = (e) => {
+    try {
+      const evt = JSON.parse(e.data);
+      pushEvent(orderId, evt);
+    } catch (_) {
+      pushEvent(orderId, { type: 'raw', data: e.data, ts: new Date().toISOString() });
+    }
+  };
+
+  // Named event types
+  ['accepted','door_open','goods_taken','completed','rejected','error','status'].forEach(evType => {
+    es.addEventListener(evType, (e) => {
+      try {
+        const evt = { type: evType, ...JSON.parse(e.data) };
+        pushEvent(orderId, evt);
+        if (evType === 'completed' || evType === 'rejected') {
+          setTimeout(() => closeSSE(orderId), 1000);
+        }
+      } catch (_) {
+        pushEvent(orderId, { type: evType, data: e.data, ts: new Date().toISOString() });
+      }
+    });
+  });
+
+  es.onerror = () => {
+    // SSE ended or error — close quietly
+    closeSSE(orderId);
+  };
+}
+
+function closeSSE(orderId) {
+  if (trackedOrders[orderId] && trackedOrders[orderId].sse) {
+    trackedOrders[orderId].sse.close();
+    trackedOrders[orderId].sse = null;
+    // Remove SSE indicator
+    const ind = document.getElementById(`sse-ind-${CSS.escape(orderId)}`);
+    if (ind) ind.remove();
+  }
+}
+
+function stopTrackingOrder(orderId) {
+  closeSSE(orderId);
+  delete trackedOrders[orderId];
+  const card = document.getElementById(`order-card-${CSS.escape(orderId)}`);
+  if (card) card.remove();
+  updateOrderEmpty();
+}
+
+function pushEvent(orderId, evt) {
+  if (!trackedOrders[orderId]) return;
+  trackedOrders[orderId].events.push({ ...evt, _ts: new Date() });
+  // Update status from event
+  if (evt.type && trackedOrders[orderId].data) {
+    trackedOrders[orderId].data.status = evt.type;
+  }
+  renderEventTimeline(orderId);
+  updateOrderCard(orderId);
+}
+
+const EVENT_ICONS = {
+  accepted:    '⚙️',
+  door_open:   '🚶',
+  goods_taken: '🥤',
+  completed:   '🎉',
+  rejected:    '❌',
+  error:       '⚠️',
+  status:      '📋',
+  raw:         '📡',
+};
+
+function eventIcon(type) {
+  return EVENT_ICONS[type] || '📋';
+}
+
+function statusBadge(status) {
+  const map = {
+    pending:     ['badge-muted', '等待中'],
+    accepted:    ['badge-blue', '已受理'],
+    processing:  ['badge-blue', '处理中'],
+    door_open:   ['badge-yellow', '舱门已开'],
+    goods_taken: ['badge-green', '已取货'],
+    completed:   ['badge-green', '已完成'],
+    rejected:    ['badge-red', '已拒绝'],
+    error:       ['badge-red', '错误'],
+  };
+  const [cls, label] = map[status] || ['badge-muted', status || '未知'];
+  return `<span class="badge ${cls} order-status-badge">${label}</span>`;
+}
+
+function renderOrderCard(orderId) {
+  const empty = document.getElementById('order-empty');
+  if (empty) empty.remove();
+
+  const container = document.getElementById('order-cards');
+  const div = document.createElement('div');
+  div.className = 'order-card';
+  div.id = `order-card-${orderId}`;
+  div.innerHTML = `
+    <div class="order-card-header" onclick="toggleOrderCard('${escAttr(orderId)}')">
+      <span class="order-card-id">#${escHtml(orderId)}</span>
+      <span id="order-badge-${escAttr(orderId)}">${statusBadge('pending')}</span>
+      <span id="sse-ind-${escAttr(orderId)}" title="SSE 连接中" style="margin-left:4px"><span class="sse-indicator"></span></span>
+      <span class="order-card-toggle" id="order-toggle-${escAttr(orderId)}">▼</span>
+      <button class="btn-danger" style="margin-left:8px" onclick="event.stopPropagation();stopTrackingOrder('${escAttr(orderId)}')">&#x2715;</button>
+    </div>
+    <div class="order-card-body" id="order-body-${escAttr(orderId)}">
+      <div class="order-meta-grid" id="order-meta-${escAttr(orderId)}">
+        <div class="order-meta-item"><div class="order-meta-label">产品</div><div class="order-meta-value">—</div></div>
+        <div class="order-meta-item"><div class="order-meta-label">金额</div><div class="order-meta-value">—</div></div>
+        <div class="order-meta-item"><div class="order-meta-label">取货码</div><div class="order-meta-value" style="font-family:monospace">—</div></div>
+      </div>
+      <div class="redeem-row">
+        <input class="redeem-input" id="redeem-input-${escAttr(orderId)}" placeholder="取货码 (pickup_code)">
+        <button class="btn-sm" onclick="triggerRedeem('${escAttr(orderId)}')">触发取货</button>
+      </div>
+      <div class="event-timeline" id="timeline-${escAttr(orderId)}">
+        <div class="empty-state" style="padding:10px">等待事件...</div>
+      </div>
+    </div>
+  `;
+  container.prepend(div);
+}
+
+function toggleOrderCard(orderId) {
+  if (!trackedOrders[orderId]) return;
+  trackedOrders[orderId].collapsed = !trackedOrders[orderId].collapsed;
+  const body    = document.getElementById(`order-body-${orderId}`);
+  const toggle  = document.getElementById(`order-toggle-${orderId}`);
+  if (body)   body.style.display   = trackedOrders[orderId].collapsed ? 'none' : '';
+  if (toggle) toggle.textContent   = trackedOrders[orderId].collapsed ? '▶' : '▼';
+}
+
+function updateOrderCard(orderId) {
+  const order = trackedOrders[orderId];
+  if (!order || !order.data) return;
+  const data = order.data;
+
+  const badgeEl = document.getElementById(`order-badge-${orderId}`);
+  if (badgeEl) badgeEl.innerHTML = statusBadge(data.status);
+
+  const metaEl = document.getElementById(`order-meta-${orderId}`);
+  if (metaEl) {
+    const product   = data.product_name || data.lane?.name || data.item?.name || '—';
+    const amount    = data.amount != null ? `¥${Number(data.amount).toFixed(2)}` : '—';
+    const pickup    = data.pickup_code || '—';
+    metaEl.innerHTML = `
+      <div class="order-meta-item"><div class="order-meta-label">产品</div><div class="order-meta-value">${escHtml(product)}</div></div>
+      <div class="order-meta-item"><div class="order-meta-label">金额</div><div class="order-meta-value">${escHtml(amount)}</div></div>
+      <div class="order-meta-item"><div class="order-meta-label">取货码</div><div class="order-meta-value" style="font-family:monospace">${escHtml(String(pickup))}</div></div>
+    `;
+    // Pre-fill redeem input
+    if (pickup && pickup !== '—') {
+      const ri = document.getElementById(`redeem-input-${orderId}`);
+      if (ri && !ri.value) ri.value = pickup;
+    }
+  }
+}
+
+function renderEventTimeline(orderId) {
+  const order = trackedOrders[orderId];
+  if (!order) return;
+  const el = document.getElementById(`timeline-${orderId}`);
+  if (!el) return;
+  if (!order.events.length) {
+    el.innerHTML = '<div class="empty-state" style="padding:10px">等待事件...</div>';
+    return;
+  }
+  el.innerHTML = '';
+  [...order.events].reverse().forEach(evt => {
+    const time = evt._ts ? evt._ts.toLocaleTimeString('zh-CN') : '';
+    const detail = evt.message || evt.detail || evt.data || '';
+    const item = document.createElement('div');
+    item.className = 'event-item';
+    item.innerHTML = `
+      <span class="event-icon">${eventIcon(evt.type)}</span>
+      <div class="event-content">
+        <div class="event-type">${escHtml(evt.type || 'event')}</div>
+        ${detail ? `<div class="event-detail">${escHtml(String(detail))}</div>` : ''}
+      </div>
+      <span class="event-time">${time}</span>
+    `;
+    el.appendChild(item);
+  });
+}
+
+async function triggerRedeem(orderId) {
+  const input = document.getElementById(`redeem-input-${orderId}`);
+  const code  = input ? input.value.trim() : '';
+  if (!code) { showToast('请输入取货码'); return; }
+  try {
+    const res = await fetch(`${ORDER_BASE}/${orderId}/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pickup_code: code }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    showToast('取货请求已发送');
+  } catch (e) {
+    showToast('取货失败: ' + e.message);
+  }
+}
+
+function updateOrderEmpty() {
+  const container = document.getElementById('order-cards');
+  if (!Object.keys(trackedOrders).length) {
+    if (!document.getElementById('order-empty')) {
+      const emp = document.createElement('div');
+      emp.className = 'empty-state';
+      emp.id = 'order-empty';
+      emp.textContent = '暂无追踪订单 — 输入订单 ID 开始追踪';
+      container.appendChild(emp);
+    }
+  }
+}
+
+/* ── Utils ── */
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(str) {
+  return String(str).replace(/'/g,"\\'");
+}
+
+/* ── Init ── */
+connectWS();
+</script>
+</body>
+</html>
