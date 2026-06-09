@@ -1,11 +1,10 @@
 export interface Env {
   VM_KV: KVNamespace;
+  ASSETS: Fetcher;
   CLIENT_ID: string;
   CLIENT_SECRET: string;
   MACHINE_ID: string;
   MACHINE_NAME: string;
-  // Optional: URL of a real WM800 UCP gateway to proxy dispense to.
-  // If set, complete endpoint forwards to this URL instead of simulating.
   HARDWARE_GATEWAY_URL: string;
   HARDWARE_GATEWAY_TOKEN: string;
 }
@@ -69,13 +68,8 @@ interface Order {
   scenario: "normal" | "slow" | "empty";
 }
 
-function uid(): string {
-  return crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-}
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
+function uid(): string { return crypto.randomUUID().replace(/-/g, "").slice(0, 12); }
+function nowIso(): string { return new Date().toISOString(); }
 
 function json(data: unknown, status = 200, extra: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -103,9 +97,7 @@ function inferScenario(laneId: string): "normal" | "slow" | "empty" {
 }
 
 function buildTimeline(createdMs: number, scenario: string): OrderEvent[] {
-  if (scenario === "empty") {
-    return [{ status: "empty", at_ms: createdMs + 500 }];
-  }
+  if (scenario === "empty") return [{ status: "empty", at_ms: createdMs + 500 }];
   if (scenario === "slow") {
     return [
       { status: "accepted",    at_ms: createdMs + 1_000 },
@@ -114,7 +106,6 @@ function buildTimeline(createdMs: number, scenario: string): OrderEvent[] {
       { status: "completed",   at_ms: createdMs + 27_000 },
     ];
   }
-  // normal
   return [
     { status: "accepted",    at_ms: createdMs + 300 },
     { status: "door_open",   at_ms: createdMs + 3_000 },
@@ -123,10 +114,7 @@ function buildTimeline(createdMs: number, scenario: string): OrderEvent[] {
   ];
 }
 
-function currentState(order: Order): {
-  status: OrderStatus;
-  occurred: Array<{ status: string; occurred_at: string }>;
-} {
+function currentState(order: Order): { status: OrderStatus; occurred: Array<{ status: string; occurred_at: string }> } {
   const now = Date.now();
   const occurred: Array<{ status: string; occurred_at: string }> = [];
   let status: OrderStatus = "accepted";
@@ -145,7 +133,7 @@ async function authOk(request: Request, kv: KVNamespace): Promise<boolean> {
   const tok = auth.slice(7);
   const val = await kv.get(`token:${tok}`);
   if (!val) return false;
-  return JSON.parse(val).expires_ms > Date.now();
+  return (JSON.parse(val) as { expires_ms: number }).expires_ms > Date.now();
 }
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
@@ -167,19 +155,23 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   const mid   = env.MACHINE_ID   || "vm-001";
   const mname = env.MACHINE_NAME || "UCP Vending Machine";
 
-  // ── Public endpoints ────────────────────────────────────────────────────────
+  // ── Static assets (dashboard) ──────────────────────────────────────────
+  if (meth === "GET" && (path === "/" || path === "/dashboard")) {
+    return env.ASSETS.fetch(new Request(`${url.origin}/index.html`, request));
+  }
 
+  // ── Public endpoints ─────────────────────────────────────────────────
   if (meth === "GET" && path === "/.well-known/ucp") {
     return json({
       version: "1.0",
-      merchant_id: mid,
-      merchant_name: mname,
-      currency: "CNY",
+      merchant_id:       mid,
+      merchant_name:     mname,
+      currency:          "CNY",
       token_endpoint:    `${url.origin}/oauth/token`,
       cart_endpoint:     `${url.origin}/cart-sessions`,
       checkout_endpoint: `${url.origin}/checkout-sessions`,
       catalog_endpoint:  `${url.origin}/catalog`,
-      signing_keys: [],
+      signing_keys:      [],
     });
   }
 
@@ -187,43 +179,80 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return json({ status: "ok", machine_id: mid, time: nowIso() });
   }
 
-  // ── OAuth token ─────────────────────────────────────────────────────────────
+  // ── SSE dashboard stream (no auth required) ───────────────────────────────
+  if (meth === "GET" && path === "/sse") {
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = writable.getWriter();
+    const enc    = (s: string) => new TextEncoder().encode(s);
+    const sse    = async (name: string, data: unknown) =>
+      writer.write(enc(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
+
+    (async () => {
+      try {
+        const getProducts = async () => {
+          const list  = await kv.list({ prefix: "product:" });
+          const items = await Promise.all(list.keys.map(k => kv.get(k.name)));
+          return items.filter(Boolean).map(v => JSON.parse(v!));
+        };
+
+        await sse("snapshot", {
+          catalog:   { products: await getProducts() },
+          discovery: {
+            version: "1.0",
+            merchant_id:   mid,
+            merchant_name: mname,
+            currency: "CNY",
+          },
+        });
+
+        for (let i = 0; i < 36; i++) {   // 36 × 10 s = 6 min
+          await new Promise(r => setTimeout(r, 10000));
+          const products = await getProducts();
+          await sse("catalog", { products, count: products.length });
+        }
+      } catch { /* client disconnected */ } finally {
+        await writer.close().catch(() => {});
+      }
+    })();
+
+    return new Response(readable, {
+      headers: {
+        "Content-Type":  "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
+  }
+
+  // ── OAuth token ────────────────────────────────────────────────────
   if (meth === "POST" && path === "/oauth/token") {
     let grantType = "", clientId = "", clientSecret = "";
     const ct = request.headers.get("Content-Type") ?? "";
     if (ct.includes("application/x-www-form-urlencoded")) {
-      const p = new URLSearchParams(await request.text());
+      const p  = new URLSearchParams(await request.text());
       grantType    = p.get("grant_type")    ?? "";
       clientId     = p.get("client_id")     ?? "";
       clientSecret = p.get("client_secret") ?? "";
     } else {
-      const b: any = await request.json().catch(() => ({}));
-      grantType    = b.grant_type    ?? "";
-      clientId     = b.client_id     ?? "";
-      clientSecret = b.client_secret ?? "";
+      const b  = await request.json().catch(() => ({})) as Record<string, string>;
+      grantType    = b["grant_type"]    ?? "";
+      clientId     = b["client_id"]     ?? "";
+      clientSecret = b["client_secret"] ?? "";
     }
-    if (grantType !== "client_credentials") {
-      return apiErr("unsupported_grant_type", 400, "unsupported_grant_type");
-    }
-    const wantId     = env.CLIENT_ID     || "vending";
-    const wantSecret = env.CLIENT_SECRET || "secret";
-    if (clientId !== wantId || clientSecret !== wantSecret) {
+    if (grantType !== "client_credentials") return apiErr("unsupported_grant_type", 400, "unsupported_grant_type");
+    if (clientId !== (env.CLIENT_ID || "vending") || clientSecret !== (env.CLIENT_SECRET || "secret")) {
       return apiErr("invalid_client", 401, "invalid_client");
     }
     const token = `tok_${uid()}`;
     const ttl   = 3600;
-    await kv.put(
-      `token:${token}`,
-      JSON.stringify({ client_id: clientId, issued_at: nowIso(), expires_ms: Date.now() + ttl * 1000 }),
-      { expirationTtl: ttl + 60 },
-    );
+    await kv.put(`token:${token}`, JSON.stringify({ client_id: clientId, issued_at: nowIso(), expires_ms: Date.now() + ttl * 1000 }), { expirationTtl: ttl + 60 });
     return json({ access_token: token, token_type: "Bearer", expires_in: ttl });
   }
 
-  // ── Catalog (read is public, write requires auth) ────────────────────────────
+  // ── Catalog (read public, write requires auth) ──────────────────────────────
   if (meth === "GET" && path === "/catalog") {
-    const list  = await kv.list({ prefix: "product:" });
-    const items = await Promise.all(list.keys.map(k => kv.get(k.name)));
+    const list     = await kv.list({ prefix: "product:" });
+    const items    = await Promise.all(list.keys.map(k => kv.get(k.name)));
     const products = items.filter(Boolean).map(v => JSON.parse(v!));
     return json({ products, count: products.length });
   }
@@ -233,15 +262,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     const pid = productMatch[1];
     if (meth === "GET") {
       const val = await kv.get(`product:${pid}`);
-      if (!val) return apiErr("Product not found", 404, "not_found");
-      return json(JSON.parse(val));
+      return val ? json(JSON.parse(val)) : apiErr("Product not found", 404, "not_found");
     }
     if (meth === "PUT") {
       if (!await authOk(request, kv)) return apiErr("Unauthorized", 401, "unauthorized");
       const existing = await kv.get(`product:${pid}`);
       if (!existing) return apiErr("Product not found", 404, "not_found");
-      const body: any = await request.json();
-      const updated: Product = { ...JSON.parse(existing), ...body, id: pid };
+      const updated: Product = { ...JSON.parse(existing), ...await request.json() as Partial<Product>, id: pid };
       await kv.put(`product:${pid}`, JSON.stringify(updated));
       return json(updated);
     }
@@ -254,32 +281,24 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
   if (meth === "POST" && path === "/catalog") {
     if (!await authOk(request, kv)) return apiErr("Unauthorized", 401, "unauthorized");
-    const body: any = await request.json();
-    const { id, name, price_fen, lane_id } = body;
-    if (!id || !name || typeof price_fen !== "number" || !lane_id) {
+    const b = await request.json() as Record<string, unknown>;
+    if (!b["id"] || !b["name"] || typeof b["price_fen"] !== "number" || !b["lane_id"]) {
       return apiErr("id, name, price_fen (number), lane_id required");
     }
-    const product: Product = {
-      id, name, price_fen,
-      currency:    body.currency    || "CNY",
-      lane_id,
-      image_url:   body.image_url   || "",
-      available:   body.available   !== false,
-      description: body.description || "",
-    };
-    await kv.put(`product:${id}`, JSON.stringify(product));
+    const product: Product = { id: b["id"] as string, name: b["name"] as string, price_fen: b["price_fen"] as number, currency: (b["currency"] as string) || "CNY", lane_id: b["lane_id"] as string, image_url: (b["image_url"] as string) || "", available: b["available"] !== false, description: (b["description"] as string) || "" };
+    await kv.put(`product:${product.id}`, JSON.stringify(product));
     return json(product, 201);
   }
 
-  // ── All remaining endpoints require auth ─────────────────────────────────────
+  // ── All remaining require auth ─────────────────────────────────────────────
   if (!await authOk(request, kv)) {
     return apiErr("Unauthorized — POST /oauth/token to get a token", 401, "unauthorized");
   }
 
-  // ── Cart sessions ────────────────────────────────────────────────────────────
+  // ── Cart sessions ─────────────────────────────────────────────────────────
   if (meth === "POST" && path === "/cart-sessions") {
-    const body: any = await request.json();
-    const items: Array<{ product_id: string; qty?: number }> = body.items || [];
+    const b     = await request.json() as Record<string, unknown>;
+    const items = (b["items"] ?? []) as Array<{ product_id: string; qty?: number }>;
     if (!items.length) return apiErr("items array required");
 
     let total_fen = 0;
@@ -295,56 +314,27 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     }
 
     const now = Date.now();
-    const cart: CartSession = {
-      id:         `cart_${uid()}`,
-      items:      resolved,
-      total_fen,
-      currency:   "CNY",
-      created_at: new Date(now).toISOString(),
-      expires_at: new Date(now + 600_000).toISOString(),
-    };
+    const cart: CartSession = { id: `cart_${uid()}`, items: resolved, total_fen, currency: "CNY", created_at: new Date(now).toISOString(), expires_at: new Date(now + 600_000).toISOString() };
     await kv.put(`cart:${cart.id}`, JSON.stringify(cart), { expirationTtl: 600 });
-    return json({
-      ucp:          { version: "1.0" },
-      cart_session: cart,
-      continue_url: `${url.origin}/checkout-sessions`,
-    }, 201);
+    return json({ ucp: { version: "1.0" }, cart_session: cart, continue_url: `${url.origin}/checkout-sessions` }, 201);
   }
 
-  // ── Checkout sessions ────────────────────────────────────────────────────────
+  // ── Checkout sessions ────────────────────────────────────────────────────
   if (meth === "POST" && path === "/checkout-sessions") {
-    const body: any = await request.json();
-    if (!body.cart_id) return apiErr("cart_id required");
-    const cartVal = await kv.get(`cart:${body.cart_id}`);
+    const b = await request.json() as Record<string, unknown>;
+    if (!b["cart_id"]) return apiErr("cart_id required");
+    const cartVal = await kv.get(`cart:${b["cart_id"]}`);
     if (!cartVal) return apiErr("cart_not_found: expired or invalid", 404, "cart_not_found");
     const cart: CartSession = JSON.parse(cartVal);
-
-    const cs: CheckoutSession = {
-      id:         `cs_${uid()}`,
-      cart_id:    body.cart_id,
-      items:      cart.items,
-      total_fen:  cart.total_fen,
-      currency:   cart.currency,
-      status:     "pending",
-      created_at: nowIso(),
-      order_id:   null,
-    };
+    const cs: CheckoutSession = { id: `cs_${uid()}`, cart_id: b["cart_id"] as string, items: cart.items, total_fen: cart.total_fen, currency: cart.currency, status: "pending", created_at: nowIso(), order_id: null };
     await kv.put(`checkout:${cs.id}`, JSON.stringify(cs), { expirationTtl: 3600 });
-    return json({
-      ucp:              { version: "1.0" },
-      checkout_session: {
-        ...cs,
-        totals: [{ label: "合计", amount_fen: cs.total_fen, currency: cs.currency }],
-      },
-      continue_url: `${url.origin}/checkout-sessions/${cs.id}/complete`,
-    }, 201);
+    return json({ ucp: { version: "1.0" }, checkout_session: { ...cs, totals: [{ label: "合计", amount_fen: cs.total_fen, currency: cs.currency }] }, continue_url: `${url.origin}/checkout-sessions/${cs.id}/complete` }, 201);
   }
 
   const csGetMatch = path.match(/^\/checkout-sessions\/([^/]+)$/);
   if (csGetMatch && meth === "GET") {
     const val = await kv.get(`checkout:${csGetMatch[1]}`);
-    if (!val) return apiErr("Checkout session not found", 404, "not_found");
-    return json({ ucp: { version: "1.0" }, checkout_session: JSON.parse(val) });
+    return val ? json({ ucp: { version: "1.0" }, checkout_session: JSON.parse(val) }) : apiErr("Not found", 404, "not_found");
   }
 
   const completeMatch = path.match(/^\/checkout-sessions\/([^/]+)\/complete$/);
@@ -353,106 +343,54 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     const val  = await kv.get(`checkout:${csId}`);
     if (!val) return apiErr("Checkout session not found", 404, "not_found");
     const cs: CheckoutSession = JSON.parse(val);
-    if (cs.status !== "pending") {
-      return apiErr(`Already processed: ${cs.status}`, 409, "already_processed");
-    }
+    if (cs.status !== "pending") return apiErr(`Already processed: ${cs.status}`, 409, "already_processed");
     if (!cs.items.length) return apiErr("No items in checkout");
 
     const item   = cs.items[0];
     const laneId = item.lane_id || "101";
 
-    // Lane 901 = offline device
     if (parseInt(laneId, 10) === 901) {
       cs.status = "failed";
       await kv.put(`checkout:${csId}`, JSON.stringify(cs));
       return apiErr("Device offline", 503, "device_unavailable");
     }
 
-    // If a hardware gateway is configured, proxy the dispense request
     if (env.HARDWARE_GATEWAY_URL) {
       const resp = await fetch(`${env.HARDWARE_GATEWAY_URL}/checkout-sessions`, {
         method:  "POST",
-        headers: {
-          "Content-Type":  "application/json",
-          "Authorization": `Bearer ${env.HARDWARE_GATEWAY_TOKEN}`,
-        },
-        body: JSON.stringify({ cart_id: cs.cart_id, lane_id: laneId }),
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.HARDWARE_GATEWAY_TOKEN}` },
+        body:    JSON.stringify({ cart_id: cs.cart_id, lane_id: laneId }),
       });
       const proxyBody = await resp.json();
-      if (!resp.ok) {
-        cs.status = "failed";
-        await kv.put(`checkout:${csId}`, JSON.stringify(cs));
-        return json(proxyBody, resp.status);
-      }
-      cs.status   = "processing";
-      cs.order_id = (proxyBody as any).order?.id ?? null;
+      cs.status   = resp.ok ? "processing" : "failed";
+      cs.order_id = resp.ok ? ((proxyBody as Record<string, Record<string, string>>)["order"]?.["id"] ?? null) : null;
       await kv.put(`checkout:${csId}`, JSON.stringify(cs));
-      return json(proxyBody, 201);
+      return json(proxyBody, resp.status);
     }
 
-    // Mock simulation mode
     const scenario = inferScenario(laneId);
     const now      = Date.now();
-    const order: Order = {
-      id:           `ord_${uid()}`,
-      checkout_id:  csId,
-      lane_id:      laneId,
-      product_id:   item.product_id,
-      product_name: item.name,
-      price_fen:    item.price_fen,
-      currency:     cs.currency,
-      created_ms:   now,
-      events:       buildTimeline(now, scenario),
-      scenario,
-    };
-
+    const order: Order = { id: `ord_${uid()}`, checkout_id: csId, lane_id: laneId, product_id: item.product_id, product_name: item.name, price_fen: item.price_fen, currency: cs.currency, created_ms: now, events: buildTimeline(now, scenario), scenario };
     cs.status   = "processing";
     cs.order_id = order.id;
     await kv.put(`order:${order.id}`, JSON.stringify(order), { expirationTtl: 86400 });
     await kv.put(`checkout:${csId}`, JSON.stringify(cs));
 
     const { status, occurred } = currentState(order);
-    return json({
-      ucp:        { version: "1.0" },
-      order: {
-        id:           order.id,
-        status,
-        product_id:   order.product_id,
-        product_name: order.product_name,
-        price_fen:    order.price_fen,
-        currency:     order.currency,
-        events:       occurred,
-        created_at:   new Date(order.created_ms).toISOString(),
-      },
-      poll_url:   `${url.origin}/orders/${order.id}`,
-      events_url: `${url.origin}/orders/${order.id}/events`,
-    }, 201);
+    return json({ ucp: { version: "1.0" }, order: { id: order.id, status, product_id: order.product_id, product_name: order.product_name, price_fen: order.price_fen, currency: order.currency, events: occurred, created_at: new Date(order.created_ms).toISOString() }, poll_url: `${url.origin}/orders/${order.id}`, events_url: `${url.origin}/orders/${order.id}/events` }, 201);
   }
 
-  // ── Order polling ────────────────────────────────────────────────────────────
+  // ── Orders ─────────────────────────────────────────────────────────────
   const orderGetMatch = path.match(/^\/orders\/([^/]+)$/);
   if (orderGetMatch && meth === "GET") {
     const val = await kv.get(`order:${orderGetMatch[1]}`);
     if (!val) return apiErr("Order not found", 404, "not_found");
     const order: Order = JSON.parse(val);
     const { status, occurred } = currentState(order);
-    return json({
-      ucp:   { version: "1.0" },
-      order: {
-        id:           order.id,
-        status,
-        product_id:   order.product_id,
-        product_name: order.product_name,
-        price_fen:    order.price_fen,
-        currency:     order.currency,
-        lane_id:      order.lane_id,
-        events:       occurred,
-        created_at:   new Date(order.created_ms).toISOString(),
-      },
-    });
+    return json({ ucp: { version: "1.0" }, order: { id: order.id, status, product_id: order.product_id, product_name: order.product_name, price_fen: order.price_fen, currency: order.currency, lane_id: order.lane_id, events: occurred, created_at: new Date(order.created_ms).toISOString() } });
   }
 
-  // ── SSE order event stream ───────────────────────────────────────────────────
+  // ── SSE order events ────────────────────────────────────────────────────────
   const orderEventsMatch = path.match(/^\/orders\/([^/]+)\/events$/);
   if (orderEventsMatch && meth === "GET") {
     const val = await kv.get(`order:${orderEventsMatch[1]}`);
@@ -462,39 +400,26 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const writer  = writable.getWriter();
     const encode  = (s: string) => new TextEncoder().encode(s);
-    const sse     = (name: string, data: unknown) =>
-      writer.write(encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
+    const sse     = (name: string, data: unknown) => writer.write(encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
 
     (async () => {
       try {
         const { status, occurred } = currentState(order);
         await sse("status", { status, events: occurred, order_id: order.id });
-        if (["completed", "failed", "empty"].includes(status)) {
-          await sse("done", { final_status: status });
-          return;
-        }
+        if (["completed", "failed", "empty"].includes(status)) { await sse("done", { final_status: status }); return; }
         const now = Date.now();
         for (const ev of order.events) {
           if (ev.at_ms <= now) continue;
           await new Promise(r => setTimeout(r, Math.max(0, ev.at_ms - Date.now())));
           await sse("status", { status: ev.status, occurred_at: new Date(ev.at_ms).toISOString(), order_id: order.id });
-          if (["completed", "failed", "empty"].includes(ev.status)) {
-            await sse("done", { final_status: ev.status });
-            break;
-          }
+          if (["completed", "failed", "empty"].includes(ev.status)) { await sse("done", { final_status: ev.status }); break; }
         }
       } finally {
         await writer.close().catch(() => {});
       }
     })();
 
-    return new Response(readable, {
-      headers: {
-        "Content-Type":  "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
+    return new Response(readable, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*" } });
   }
 
   return apiErr("Endpoint not found", 404, "not_found");
