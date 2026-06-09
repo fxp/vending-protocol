@@ -1,0 +1,13 @@
+{
+  "name": "ucp-mock",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-09-23",
+  "account_id": "0356d59ccdcff356bf3bbdb580bbaa60",
+  "kv_namespaces": [
+    { "binding": "SC_KV", "id": "38f0c26366de41e8b741450cb8e80894" }
+  ],
+  "vars": {
+    "BASE_URL": "https://ucp-mock.fxp007.workers.dev",
+    "JWT_SECRET": "dev-mock-secret-change-in-prod"
+  }
+}

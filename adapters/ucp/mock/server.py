@@ -491,25 +491,34 @@ async def stream_order(
 
 # ── Alipay AI Pay mock endpoints ──────────────────────────────────────────────
 
+class AgentPayInfo(BaseModel):
+    agent_type: str = "AI_AGENT"
+    agent_id: Optional[str] = None
+    agent_name: Optional[str] = None
+
 class AlipayCreateOrderBody(BaseModel):
     checkout_id: str
     amount: int
     currency: str = "CNY"
     product_name: str = ""
     buyer_id: Optional[str] = None
+    merchant_order_id: Optional[str] = None
+    agent_pay_info: Optional[AgentPayInfo] = None
 
 @app.post("/alipay/create-order")
 def alipay_create_order(body: AlipayCreateOrderBody, _: dict = Depends(_require)):
     """Create a pre-order (预下单). Returns cashier_url for user to pay."""
     alipay_order_id = f"alipay_{uuid.uuid4().hex[:16]}"
     _alipay_orders[alipay_order_id] = {
-        "alipay_order_id": alipay_order_id,
-        "checkout_id":     body.checkout_id,
-        "amount":          body.amount,
-        "currency":        body.currency,
-        "product_name":    body.product_name,
-        "status":          "pending",
-        "created_at":      time.time(),
+        "alipay_order_id":  alipay_order_id,
+        "checkout_id":      body.checkout_id,
+        "merchant_order_id": body.merchant_order_id or body.checkout_id,
+        "amount":           body.amount,
+        "currency":         body.currency,
+        "product_name":     body.product_name,
+        "status":           "pending",
+        "created_at":       time.time(),
+        "agent_pay_info":   body.agent_pay_info.model_dump() if body.agent_pay_info else None,
     }
     # Update the checkout to reference this alipay order
     chk = _checkouts.get(body.checkout_id)
@@ -533,24 +542,28 @@ def alipay_query_order(alipay_order_id: str, _: dict = Depends(_require)):
     if not order:
         raise HTTPException(404, "alipay order not found")
     return {
-        "alipay_order_id": alipay_order_id,
-        "status":          order["status"],
-        "amount":          order["amount"],
-        "currency":        order["currency"],
-        "paid_at":         order.get("paid_at"),
-        # AP2-aligned: return intent_credential on success
+        "alipay_order_id":   alipay_order_id,
+        "checkout_id":       order["checkout_id"],
+        "merchant_order_id": order.get("merchant_order_id"),
+        "status":            order["status"],
+        "amount":            order["amount"],
+        "currency":          order["currency"],
+        "paid_at":           order.get("paid_at"),
         "intent_credential": order.get("intent_credential"),
     }
 
+class AlipayConfirmBody(BaseModel):
+    auth_method: Optional[str] = "face"
+
 @app.post("/alipay/confirm-payment/{alipay_order_id}")
-def alipay_confirm_payment(alipay_order_id: str):
-    """Called by UI when user 'scans QR and confirms biometric'. Simulates Alipay server-side confirm."""
+def alipay_confirm_payment(alipay_order_id: str, body: AlipayConfirmBody = AlipayConfirmBody()):
+    """Called by UI when user confirms biometric. Simulates Alipay TEE server-side confirm."""
     order = _alipay_orders.get(alipay_order_id)
     if not order:
         raise HTTPException(404, "alipay order not found")
     order["status"] = "paid"
     order["paid_at"] = time.time()
-    # Simulate Alipay issuing an intent credential (AP2 payment_mandate)
+    auth_method = body.auth_method or "face"
     import base64 as _b64c, json as _jsonc
     mandate_payload = {
         "type": "alipay_intent_credential",
@@ -558,7 +571,7 @@ def alipay_confirm_payment(alipay_order_id: str):
         "checkout_id": order["checkout_id"],
         "amount": order["amount"],
         "currency": order["currency"],
-        "auth_method": "mock_biometric",
+        "auth_method": auth_method,
         "issued_at": order["paid_at"],
         "act_version": "ACT/1.0",
     }
@@ -587,63 +600,115 @@ def alipay_cashier_page(alipay_order_id: str):
 <p style="color:#666">{product} · {amount_yuan}</p></body></html>""")
     return HTMLResponse(f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>支付宝 AI 付</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:-apple-system,sans-serif;background:#fff;height:100vh;display:flex;align-items:center;justify-content:center}}
-.card{{width:340px;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.12)}}
-.hdr{{background:linear-gradient(135deg,#1677ff,#0958d9);color:#fff;padding:20px;text-align:center}}
-.hdr .logo{{font-size:28px;font-weight:800;letter-spacing:-1px}}
-.hdr .sub{{font-size:12px;opacity:.8;margin-top:2px}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;background:#f5f5f5;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+.card{{width:340px;border-radius:20px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.15)}}
+.hdr{{background:linear-gradient(135deg,#1677ff,#0958d9);color:#fff;padding:20px 24px;text-align:center;position:relative}}
+.hdr .logo{{font-size:22px;font-weight:800;letter-spacing:-0.5px}}
+.hdr .badge{{display:inline-block;background:rgba(255,255,255,.2);border-radius:20px;padding:2px 10px;font-size:11px;margin-top:4px}}
 .body{{padding:24px;background:#fff}}
-.amount{{text-align:center;font-size:36px;font-weight:800;color:#1a1a1a;margin:12px 0}}
-.item{{font-size:13px;color:#888;text-align:center;margin-bottom:20px}}
-.qr{{background:#f8f9fa;border:2px dashed #d0d0d0;border-radius:12px;padding:20px;text-align:center;margin-bottom:16px}}
-.qr .icon{{font-size:40px;margin-bottom:8px}}
-.qr .txt{{font-size:12px;color:#666}}
-.methods{{display:flex;gap:8px;margin-bottom:16px}}
-.method{{flex:1;padding:8px;background:#f8f9fa;border-radius:8px;text-align:center;font-size:11px;color:#666}}
-.method .icon{{font-size:18px;display:block;margin-bottom:3px}}
-.btn{{width:100%;padding:14px;background:linear-gradient(135deg,#1677ff,#0958d9);color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer}}
-.btn:hover{{opacity:.9}}
-.security{{font-size:11px;color:#aaa;text-align:center;margin-top:12px}}
+.merchant{{font-size:13px;color:#888;text-align:center;margin-bottom:4px}}
+.amount{{text-align:center;font-size:40px;font-weight:800;color:#1a1a1a;margin-bottom:20px}}
+.bio-label{{font-size:12px;color:#888;text-align:center;margin-bottom:10px}}
+.methods{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:20px}}
+.method{{padding:12px 4px;background:#f8f9fa;border:2px solid transparent;border-radius:12px;text-align:center;cursor:pointer;transition:.15s}}
+.method:hover{{background:#e8f0ff;border-color:#1677ff}}
+.method.active{{background:#e8f0ff;border-color:#1677ff}}
+.method .icon{{font-size:22px;display:block;margin-bottom:4px}}
+.method .label{{font-size:11px;color:#555;font-weight:500}}
+.progress{{display:none;text-align:center;padding:16px;margin-bottom:12px}}
+.progress .spinner{{width:40px;height:40px;border:3px solid #e0e0e0;border-top-color:#1677ff;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 10px}}
+@keyframes spin{{to{{transform:rotate(360deg)}}}}
+.progress .msg{{font-size:13px;color:#555}}
+.btn{{width:100%;padding:15px;background:linear-gradient(135deg,#1677ff,#0958d9);color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;transition:.15s}}
+.btn:hover:not(:disabled){{opacity:.9;transform:translateY(-1px)}}
+.btn:disabled{{opacity:.6;cursor:not-allowed;transform:none}}
+.btn.success{{background:linear-gradient(135deg,#00a854,#007a3c)}}
+.security{{font-size:11px;color:#bbb;text-align:center;margin-top:14px}}
+.agent-info{{background:#fffbe6;border:1px solid #ffe58f;border-radius:8px;padding:10px 12px;margin-bottom:16px;font-size:12px;color:#875800}}
+.agent-info strong{{display:block;margin-bottom:2px}}
 </style></head>
 <body><div class="card">
   <div class="hdr">
-    <div class="logo">支 AI付</div>
-    <div class="sub">Alipay AI Pay · ACT/1.0</div>
+    <div class="logo">支付宝 AI 付</div>
+    <div class="badge">Alipay Agent Pay · ACT/1.0</div>
   </div>
   <div class="body">
-    <div class="item">{product}</div>
+    <div class="merchant">{product}</div>
     <div class="amount">{amount_yuan}</div>
-    <div class="qr">
-      <div class="icon">📱</div>
-      <div class="txt">扫描或点击下方按钮确认支付</div>
+    <div class="agent-info">
+      <strong>🤖 AI 代理授权支付</strong>
+      智能体已发起代理支付请求，请选择身份验证方式确认授权
     </div>
-    <div class="methods">
-      <div class="method"><span class="icon">😊</span>面容</div>
-      <div class="method"><span class="icon">👆</span>指纹</div>
-      <div class="method"><span class="icon">🎙️</span>声纹</div>
-      <div class="method"><span class="icon">🔢</span>密码</div>
+    <div class="bio-label">选择身份验证方式</div>
+    <div class="methods" id="methods">
+      <div class="method active" onclick="select(this,'face')">
+        <span class="icon">😊</span><span class="label">面容</span>
+      </div>
+      <div class="method" onclick="select(this,'fingerprint')">
+        <span class="icon">👆</span><span class="label">指纹</span>
+      </div>
+      <div class="method" onclick="select(this,'voiceprint')">
+        <span class="icon">🎙️</span><span class="label">声纹</span>
+      </div>
+      <div class="method" onclick="select(this,'pin')">
+        <span class="icon">🔢</span><span class="label">密码</span>
+      </div>
     </div>
-    <button class="btn" onclick="confirm()">确认支付 {amount_yuan}</button>
-    <div class="security">🔒 由支付宝 TEE 安全保护 · 意图授权凭证 ACT/1.0</div>
+    <div class="progress" id="progress">
+      <div class="spinner"></div>
+      <div class="msg" id="progress-msg">正在验证身份…</div>
+    </div>
+    <button class="btn" id="paybtn" onclick="doConfirm()">确认支付 {amount_yuan}</button>
+    <div class="security">🔒 由支付宝 TEE 安全保护 · 意图授权凭证不可伪造</div>
   </div>
 </div>
 <script>
-function confirm() {{
-  fetch('/alipay/confirm-payment/{alipay_order_id}', {{method:'POST'}})
-    .then(r => r.json())
-    .then(d => {{
-      if(d.status === 'paid') {{
-        document.querySelector('.btn').textContent = '✅ 支付成功';
-        document.querySelector('.btn').style.background = '#00a854';
-        document.querySelector('.btn').disabled = true;
-        // Notify parent window
-        if(window.parent !== window) {{
-          window.parent.postMessage({{type:'alipay_paid', alipay_order_id:'{alipay_order_id}', intent_credential: d.intent_credential}}, '*');
-        }}
+var authMethod = 'face';
+var MSGS = {{face:'正在识别面容…',fingerprint:'正在识别指纹…',voiceprint:'正在识别声纹…',pin:'正在验证密码…'}};
+function select(el, m) {{
+  document.querySelectorAll('.method').forEach(function(x){{x.classList.remove('active')}});
+  el.classList.add('active');
+  authMethod = m;
+}}
+function doConfirm() {{
+  document.getElementById('paybtn').disabled = true;
+  document.getElementById('methods').style.opacity = '0.4';
+  var prog = document.getElementById('progress');
+  var msg  = document.getElementById('progress-msg');
+  prog.style.display = 'block';
+  msg.textContent = MSGS[authMethod] || '正在验证…';
+  fetch('/alipay/confirm-payment/{alipay_order_id}', {{
+    method: 'POST',
+    headers: {{'Content-Type':'application/json'}},
+    body: JSON.stringify({{auth_method: authMethod}})
+  }})
+  .then(function(r){{return r.json()}})
+  .then(function(d) {{
+    prog.style.display = 'none';
+    if (d.status === 'paid') {{
+      var btn = document.getElementById('paybtn');
+      btn.textContent = '✅ 支付成功';
+      btn.classList.add('success');
+      btn.disabled = false;
+      if (window.parent !== window) {{
+        window.parent.postMessage({{
+          type: 'alipay_paid',
+          alipay_order_id: '{alipay_order_id}',
+          intent_credential: d.intent_credential,
+          auth_method: authMethod
+        }}, '*');
       }}
-    }});
+    }}
+  }})
+  .catch(function(e) {{
+    prog.style.display = 'none';
+    document.getElementById('paybtn').disabled = false;
+    document.getElementById('methods').style.opacity = '1';
+    alert('支付请求失败，请重试');
+  }});
 }}
 </script></body></html>""")
 

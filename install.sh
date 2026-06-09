@@ -69,6 +69,13 @@ for d in "$REPO_ROOT"/adapters/*/mock/; do
   fi
 done
 
+echo "Linking agentic-commerce-skills/skills/**/* into $TARGET_DIR/"
+for d in "$REPO_ROOT"/agentic-commerce-skills/skills/*/*/; do
+  [ -d "$d" ] || continue
+  [ -f "$d/SKILL.md" ] || { echo "  skip $(basename "$d") (no SKILL.md)"; continue; }
+  link_dir "${d%/}"
+done
+
 echo
 echo "Done. Verify with:"
-echo "  ls -la $TARGET_DIR/ | grep -E 'weimi|wm800|ucp'"
+echo "  ls -la $TARGET_DIR/ | grep -E 'weimi|wm800|ucp|ap2'"

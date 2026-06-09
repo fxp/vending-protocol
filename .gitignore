@@ -6,3 +6,5 @@ __pycache__/
 *.egg-info/
 .idea/
 .vscode/
+cloudflare/**/node_modules/
+examples/langgraph-vending/backend/.env
