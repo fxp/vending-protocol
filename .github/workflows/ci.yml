@@ -49,38 +49,7 @@ jobs:
         run: npx tsc --noEmit
         working-directory: cloudflare/mock-worker
 
-  # ── Deploy ucp-mock to Cloudflare (push to main only) ───────────────────────
-  deploy:
-    name: Deploy → Cloudflare
-    needs: [pytest, typecheck]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment: production
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: cloudflare/mock-worker/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-        working-directory: cloudflare/mock-worker
-
-      - name: Deploy ucp-mock
-        run: npx wrangler deploy
-        working-directory: cloudflare/mock-worker
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-
-      - name: Smoke test
-        run: |
-          HEALTH=$(curl -sf https://ucp-mock.fxp007.workers.dev/.well-known/ucp)
-          echo "$HEALTH"
-          echo "$HEALTH" | grep -q '"payment_handlers"' || (echo "smoke test failed" && exit 1)
+  # ── Deploy 已退役（2026-06-12）──────────────────────────────────────────────
+  # ucp-mock 旧 demo worker 已删除（被新架构 ADR-14 取代：ucp-vending-machine）。
+  # 此 repo 仅保留 pytest + typecheck 作参考，不再自动部署。
+  # 如需恢复部署，从 git 历史取回 deploy job。
